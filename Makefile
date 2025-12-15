@@ -17,16 +17,16 @@ help:
 	@echo "  make allci              Run all CI steps (check, format, type, test coverage)"
 
 dev:
-	uv run modern_python_boilerplate
+	uv run trade_analyzer
 
 prod:
-	uv run modern_python_boilerplate
+	uv run trade_analyzer
 
 test:
 	uv run pytest tests/
 
 cov:
-	uv run pytest --cov=src/modern_python_boilerplate tests/ --cov-report=term-missing
+	uv run pytest --cov=src/trade_analyzer tests/ --cov-report=term-missing
 
 check:
 	uv run ruff check $$(git diff --name-only --cached -- '*.py')
@@ -50,10 +50,10 @@ commit:
 	uv run pre-commit
 
 dockerbuild:
-	docker build -t modern-python-boilerplate:latest .
+	docker build -t trade-analyzer:latest .
 
 dockerrun:
-	docker run --rm modern-python-boilerplate:latest
+	docker run --rm trade-analyzer:latest
 
 allci:
 	$(MAKE) check

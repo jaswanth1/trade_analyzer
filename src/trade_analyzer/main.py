@@ -1,6 +1,6 @@
 def hello_world() -> str:
     """Prints a hello world message."""
-    return "Hello from modern-python-boilerplate!"
+    return "Hello from trade-analyzer!"
 
 
 if __name__ == "__main__":
