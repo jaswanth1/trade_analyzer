@@ -1,4 +1,69 @@
-"""MongoDB document models using Pydantic."""
+"""
+MongoDB document models using Pydantic.
+
+This module defines all Pydantic models used for MongoDB document validation
+and serialization throughout the Trade Analyzer application. Models are
+organized by their associated pipeline phase.
+
+Architecture:
+-------------
+All models inherit from Pydantic BaseModel and use Field() for validation.
+Enums are used for categorical fields to ensure type safety.
+
+Model Categories:
+----------------
+1. ENUMS - State machines for regime, setup type, trade status
+2. STOCK DOCUMENTS - Trading universe master data
+3. REGIME DOCUMENTS - Market regime assessment
+4. TRADE SETUP DOCUMENTS - Detected trading opportunities
+5. TRADE DOCUMENTS - Executed trades with P&L tracking
+6. SYSTEM HEALTH DOCUMENTS - Performance monitoring
+7. FUNDAMENTAL DOCUMENTS - Phase 1 fundamental analysis
+8. RISK MANAGEMENT DOCUMENTS - Phase 5-6 position sizing
+9. PORTFOLIO DOCUMENTS - Phase 6 portfolio construction
+10. EXECUTION DOCUMENTS - Phase 7 trade execution
+11. RECOMMENDATION DOCUMENTS - Phase 8 final output
+
+Validation:
+-----------
+Models use Pydantic's validation features:
+- Field(...) for required fields
+- Field(default=X) for optional fields with defaults
+- ge/le/gt/lt for numeric bounds
+- Literal[] for restricted string values
+
+Usage:
+------
+    from trade_analyzer.db.models import StockDoc, RegimeState
+
+    # Create a stock document
+    stock = StockDoc(
+        symbol="RELIANCE",
+        name="Reliance Industries Ltd",
+        sector="Oil & Gas",
+        market_cap=1500000,
+    )
+
+    # Serialize to dict for MongoDB
+    stock_dict = stock.model_dump()
+
+    # Deserialize from MongoDB document
+    stock = StockDoc.model_validate(mongo_document)
+
+    # Use enum values
+    if regime.state == RegimeState.RISK_OFF:
+        print("No trading allowed")
+
+Note:
+-----
+All models have `class Config: use_enum_values = True` to ensure
+enum values (strings) are stored in MongoDB, not enum names.
+
+See Also:
+---------
+- trade_analyzer.db.connection: Database connection handling
+- trade_analyzer.db.repositories: Data access patterns
+"""
 
 from datetime import datetime
 from enum import Enum
@@ -7,8 +72,26 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
+# =============================================================================
+# ENUMERATIONS
+# State machines for various entity lifecycles
+# =============================================================================
+
+
 class RegimeState(str, Enum):
-    """Market regime states."""
+    """
+    Market regime states for position sizing and trading decisions.
+
+    The regime determines how aggressively the system trades:
+    - RISK_ON: Full position sizes, all setup types allowed
+    - CHOPPY: 50% position sizes, only pullbacks allowed
+    - RISK_OFF: No new positions, focus on capital preservation
+
+    Attributes:
+        RISK_ON: Favorable market conditions (>70% probability)
+        CHOPPY: Mixed signals, proceed with caution (50-70%)
+        RISK_OFF: Unfavorable conditions (<50% risk-on probability)
+    """
 
     RISK_ON = "risk_on"
     CHOPPY = "choppy"
@@ -16,7 +99,19 @@ class RegimeState(str, Enum):
 
 
 class SetupType(str, Enum):
-    """Technical setup types."""
+    """
+    Technical setup types for trade detection.
+
+    Each setup type has specific entry/exit rules:
+    - PULLBACK: Stock in uptrend, pulled back to support (primary setup)
+    - BREAKOUT: VCP or consolidation breakout with volume
+    - RETEST: Successful breakout retesting breakout level
+
+    Attributes:
+        PULLBACK: Trend pullback to 20/50 DMA
+        BREAKOUT: Volatility contraction breakout
+        RETEST: Breakout level retest
+    """
 
     PULLBACK = "pullback"
     BREAKOUT = "breakout"
@@ -24,7 +119,17 @@ class SetupType(str, Enum):
 
 
 class TradeStatus(str, Enum):
-    """Trade lifecycle status."""
+    """
+    Trade lifecycle status tracking.
+
+    Attributes:
+        PENDING: Setup identified, awaiting entry
+        ACTIVE: Position entered, tracking P&L
+        CLOSED_WIN: Exited at profit (target hit)
+        CLOSED_loss: Exited at loss (stop hit)
+        CANCELLED: Trade cancelled before entry
+        SKIPPED: Skipped due to gap or other reason
+    """
 
     PENDING = "pending"
     ACTIVE = "active"
@@ -35,7 +140,15 @@ class TradeStatus(str, Enum):
 
 
 class SetupStatus(str, Enum):
-    """Setup status."""
+    """
+    Setup lifecycle status.
+
+    Attributes:
+        ACTIVE: Setup valid, awaiting trigger
+        TRIGGERED: Entry triggered, trade opened
+        EXPIRED: Setup expired (week ended without trigger)
+        INVALIDATED: Conditions no longer valid
+    """
 
     ACTIVE = "active"
     TRIGGERED = "triggered"
@@ -43,11 +156,31 @@ class SetupStatus(str, Enum):
     INVALIDATED = "invalidated"
 
 
-# --- Stock Documents ---
+# =============================================================================
+# STOCK DOCUMENTS (Phase 1: Universe)
+# Primary trading universe with quality scores and tier information
+# =============================================================================
 
 
 class StockDoc(BaseModel):
-    """Stock master data document."""
+    """
+    Stock master data document.
+
+    Represents a single stock in the trading universe with quality scoring,
+    fundamental qualification, and tier classification.
+
+    Quality Scoring:
+    ---------------
+    - Tier A (90-100): MTF + Nifty 50 (highest liquidity)
+    - Tier B (80-89): MTF + Nifty 100
+    - Tier C (70-79): MTF + Nifty 200/500
+    - Tier D (<70): MTF only or non-MTF
+
+    Fundamental Qualification:
+    -------------------------
+    Stocks must pass both fundamental score (>60) AND institutional
+    ownership filters to be marked as fundamentally_qualified.
+    """
 
     symbol: str = Field(..., description="NSE symbol")
     name: str = Field(..., description="Company name")
@@ -60,15 +193,38 @@ class StockDoc(BaseModel):
     is_active: bool = Field(default=True)
     last_updated: datetime = Field(default_factory=datetime.utcnow)
 
+    # Fundamental qualification (Phase 1 filter using cached data)
+    fundamentally_qualified: bool = Field(
+        default=False, description="Passes fundamental filter (from cached scores)"
+    )
+    fundamental_score: Optional[float] = Field(
+        default=None, description="Cached fundamental score (0-100)"
+    )
+    fundamental_updated_at: Optional[datetime] = Field(
+        default=None, description="When fundamental data was last refreshed"
+    )
+
     class Config:
         use_enum_values = True
 
 
-# --- Regime Documents ---
+# =============================================================================
+# REGIME DOCUMENTS
+# Market regime assessment (Risk-On/Choppy/Risk-Off)
+# The regime determines position sizing and trading aggressiveness
+# =============================================================================
 
 
 class RegimeIndicators(BaseModel):
-    """Regime assessment indicator values."""
+    """
+    Regime assessment indicator values.
+
+    Four indicator categories with equal 25% weight each:
+    1. Trend: Nifty vs 20/50/200 DMA
+    2. Breadth: % of stocks above 200 DMA
+    3. Volatility: India VIX level and trend
+    4. Leadership: Cyclicals vs Defensives spread
+    """
 
     nifty_vs_20dma: float = Field(default=0.0)
     nifty_vs_50dma: float = Field(default=0.0)
@@ -96,11 +252,21 @@ class RegimeAssessmentDoc(BaseModel):
         use_enum_values = True
 
 
-# --- Trade Setup Documents ---
+# =============================================================================
+# TRADE SETUP DOCUMENTS (Phase 4B)
+# Detected trading opportunities from technical pattern analysis
+# =============================================================================
 
 
 class GapContingency(BaseModel):
-    """Monday gap handling rules."""
+    """
+    Monday gap handling rules.
+
+    Defines actions for different gap scenarios on Monday open:
+    - gap_through_stop: Price opened below stop loss
+    - small_gap_against: Small adverse gap but above stop
+    - gap_above_entry: Large favorable gap above entry zone
+    """
 
     gap_through_stop: str = Field(default="SKIP")
     small_gap_against: str = Field(default="ENTER_AT_OPEN")
@@ -144,11 +310,25 @@ class TradeSetupDoc(BaseModel):
         use_enum_values = True
 
 
-# --- Trade Documents ---
+# =============================================================================
+# TRADE DOCUMENTS
+# Executed trades with entry/exit details and P&L tracking
+# =============================================================================
 
 
 class TradeDoc(BaseModel):
-    """Executed trade document."""
+    """
+    Executed trade document.
+
+    Tracks the full lifecycle of a trade from entry to exit,
+    including P&L calculation and R-multiple performance.
+
+    R-Multiple:
+    ----------
+    R = (Exit - Entry) / (Entry - Stop)
+    Positive R = profit, Negative R = loss
+    Target trades aim for 2R minimum.
+    """
 
     stock_symbol: str = Field(...)
     setup_id: Optional[str] = Field(default=None, description="Reference to trade_setup")
@@ -186,11 +366,29 @@ class TradeDoc(BaseModel):
         use_enum_values = True
 
 
-# --- System Health Documents ---
+# =============================================================================
+# SYSTEM HEALTH DOCUMENTS
+# Performance monitoring and trading system health metrics
+# =============================================================================
 
 
 class SystemHealthDoc(BaseModel):
-    """System health metrics document."""
+    """
+    System health metrics document.
+
+    Tracks key performance indicators to monitor system health:
+    - Win rates (12-week and 52-week rolling)
+    - Expectancy in R-multiples
+    - Drawdown levels
+    - Execution quality (slippage, skipped trades)
+
+    Health Score Thresholds:
+    -----------------------
+    - 70+: Continue normally
+    - 50-70: Reduce position sizes
+    - 30-50: Paper trade only
+    - <30: Stop trading, review system
+    """
 
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
@@ -222,11 +420,28 @@ class SystemHealthDoc(BaseModel):
         use_enum_values = True
 
 
-# --- Phase 5: Fundamental Intelligence Documents ---
+# =============================================================================
+# FUNDAMENTAL DOCUMENTS (Monthly Refresh, Applied in Phase 1)
+# Fundamental analysis scores and institutional ownership data
+# =============================================================================
 
 
 class FundamentalScoreDoc(BaseModel):
-    """Fundamental analysis score document."""
+    """
+    Fundamental analysis score document.
+
+    Stores multi-dimensional fundamental scores calculated from:
+    - Growth (30%): EPS Q/Q growth, Revenue Y/Y growth
+    - Profitability (25%): ROCE, ROE
+    - Leverage (20%): Debt/Equity (sector-adjusted)
+    - Cash Flow (15%): FCF Yield
+    - Earnings Quality (10%): Cash EPS vs Reported EPS
+
+    Qualification:
+    -------------
+    A stock qualifies if it passes at least 3 of 5 filter criteria.
+    Scores are refreshed monthly after quarterly results.
+    """
 
     symbol: str = Field(...)
 
@@ -311,11 +526,24 @@ class InstitutionalHoldingDoc(BaseModel):
         use_enum_values = True
 
 
-# --- Phase 6-7: Risk Management & Position Sizing Documents ---
+# =============================================================================
+# RISK MANAGEMENT DOCUMENTS (Phase 5: Risk Geometry)
+# Stop-loss calculations and position sizing
+# =============================================================================
 
 
 class StopLossMethod(str, Enum):
-    """Stop-loss calculation methods."""
+    """
+    Stop-loss calculation methods.
+
+    The system uses the tighter of two methods:
+    - STRUCTURE: Below recent swing low (99% of swing low)
+    - VOLATILITY: Entry price minus 2x ATR(14)
+    - TIME: Exit if no 2% move in 5 days (rare)
+
+    Final stop = max(structure_stop, volatility_stop)
+    Higher value = tighter stop = less risk per share.
+    """
 
     STRUCTURE = "structure"  # Below swing low
     VOLATILITY = "volatility"  # Entry - 2 * ATR
@@ -323,7 +551,20 @@ class StopLossMethod(str, Enum):
 
 
 class RiskGeometryDoc(BaseModel):
-    """Risk geometry analysis document."""
+    """
+    Risk geometry analysis document.
+
+    Calculates the complete risk/reward profile for a trade setup:
+    - Multi-method stop-loss (structure, volatility)
+    - R:R ratio validation (min 2:1 for Risk-On, 2.5:1 for Choppy)
+    - Trailing stop rules based on profit levels
+
+    Trailing Stop Rules:
+    -------------------
+    - +3% profit: Move stop to breakeven
+    - +6% profit: Trail at +2%
+    - +10% profit: Trail below 20 DMA
+    """
 
     symbol: str = Field(...)
     setup_id: Optional[str] = Field(default=None)
@@ -370,7 +611,24 @@ class RiskGeometryDoc(BaseModel):
 
 
 class PositionSizeDoc(BaseModel):
-    """Position sizing document."""
+    """
+    Position sizing document.
+
+    Calculates risk-adjusted position sizes using multiple factors:
+
+    Position Size Formula:
+    ---------------------
+    Base Shares = (Portfolio × Risk%) / (Entry - Stop)
+
+    Adjustments:
+    - Volatility: Scale by Nifty_ATR / Stock_ATR
+    - Kelly: Scale by min(1.0, Kelly_Fraction)
+    - Regime: Scale by regime multiplier (1.0/0.7/0.5/0)
+
+    Constraints:
+    - Max 8% of portfolio in single position
+    - Max 1.5% risk per trade
+    """
 
     symbol: str = Field(...)
     setup_id: Optional[str] = Field(default=None)
@@ -421,8 +679,25 @@ class PositionSizeDoc(BaseModel):
         use_enum_values = True
 
 
+# =============================================================================
+# PORTFOLIO DOCUMENTS (Phase 6: Portfolio Construction)
+# Final portfolio composition with sector/correlation constraints
+# =============================================================================
+
+
 class PortfolioAllocationDoc(BaseModel):
-    """Portfolio construction document."""
+    """
+    Portfolio construction document.
+
+    Builds the final portfolio applying multiple constraints:
+    - Max 25% in any single sector
+    - Max 70% correlation between positions
+    - Max 12 positions (Risk-On), 5 (Choppy), 0 (Risk-Off)
+    - Min 30% cash reserve
+
+    The portfolio is built by ranking setups by quality score
+    and adding positions until constraints are hit.
+    """
 
     # Portfolio metadata
     allocation_date: datetime = Field(...)
@@ -460,11 +735,24 @@ class PortfolioAllocationDoc(BaseModel):
         use_enum_values = True
 
 
-# --- Phase 8: Execution Workflow Documents ---
+# =============================================================================
+# EXECUTION DOCUMENTS (Phase 7: Execution Display)
+# Monday pre-market analysis and position tracking
+# =============================================================================
 
 
 class MondayPreMarketDoc(BaseModel):
-    """Monday pre-market gap analysis document."""
+    """
+    Monday pre-market gap analysis document.
+
+    Analyzes each setup based on Monday's expected open:
+    - Gap through stop: SKIP (invalidated)
+    - Small gap against: ENTER_AT_OPEN
+    - Gap above entry zone: SKIP (don't chase)
+
+    Generated on Monday before market open using SGX Nifty
+    or expected opening prices.
+    """
 
     analysis_date: datetime = Field(...)
     week_start: datetime = Field(...)
@@ -577,11 +865,29 @@ class FridayCloseDoc(BaseModel):
         use_enum_values = True
 
 
-# --- Phase 9: Weekly Recommendation Document ---
+# =============================================================================
+# RECOMMENDATION DOCUMENTS (Phase 8: Weekly Output)
+# Final trade recommendations with action templates
+# =============================================================================
 
 
 class WeeklyRecommendationDoc(BaseModel):
-    """Weekly trade recommendation document - the master output."""
+    """
+    Weekly trade recommendation document - the master output.
+
+    This is the final output of the entire pipeline, containing:
+    - Market regime context
+    - Approved trade setups with full details
+    - Position sizes and entry/exit rules
+    - Gap contingency plans for Monday
+
+    Lifecycle:
+    ---------
+    1. draft: Generated by pipeline
+    2. approved: Reviewed and approved for execution
+    3. executed: Trades placed
+    4. expired: Week ended
+    """
 
     week_start: datetime = Field(...)
     week_end: datetime = Field(...)

@@ -1,12 +1,80 @@
 """Execution activities for Phase 8.
 
-This module implements:
-1. Pre-market gap analysis (Monday 8:30-9:15 AM)
-2. Intraday position status updates
-3. Friday close summaries
-4. System health monitoring
+This module implements execution monitoring and analysis for the trading system.
+It handles gap analysis, position tracking, and system health monitoring.
 
-NOTE: This is UI display only - no actual order placement.
+IMPORTANT: This is UI DISPLAY ONLY - no actual order placement or broker integration.
+The system generates recommendations; execution is manual.
+
+Pipeline Position: Phase 8 (after Portfolio Construction)
+Input: 3-10 portfolio positions from Phase 7
+Output: Monday gap analysis, position status, Friday summaries
+
+Three Core Functions:
+
+1. Monday Pre-Market Gap Analysis (8:30-9:15 AM IST)
+    - Analyzes weekend gaps for all setups
+    - Applies gap contingency rules
+    - Recommends action: ENTER/SKIP/WAIT
+
+Gap Contingency Rules:
+    If current <= stop:
+        Action: SKIP (gapped through stop)
+    If current > entry_high * 1.02:
+        Action: SKIP (don't chase, >2% above)
+    If entry_low <= current <= entry_high:
+        Action: ENTER (in entry zone)
+    If current < entry_low and gap < -2%:
+        Action: WAIT (large gap against)
+    Else:
+        Action: ENTER_AT_OPEN (small gap against)
+
+2. Intraday Position Status (Throughout Week)
+    - Tracks current prices for open positions
+    - Calculates unrealized P&L and R-multiples
+    - Generates alerts for key events:
+        * Stop proximity (<2%)
+        * Target proximity (<2%)
+        * R-multiple milestones (1R, 2R, 3R)
+        * Trailing stop suggestions
+
+Position Status Values:
+    - stopped_out: Hit stop loss
+    - target_1_hit: Hit first target (2R)
+    - target_2_hit: Hit second target (3R+)
+    - in_profit: Above entry, not at target
+    - in_loss: Below entry, above stop
+
+3. Friday Close Summary (End of Week)
+    - Aggregates week's performance
+    - Closed trades P&L
+    - Open positions status
+    - System health assessment
+
+System Health Monitoring:
+
+Health Score (0-100) based on:
+    - Win rate (12W and 52W)
+    - Expectancy (recent trades)
+    - Current drawdown
+    - Sample size
+
+Recommended Actions:
+    Score ≥70: CONTINUE (system performing well)
+    Score 50-70: REDUCE (cut sizes 50%)
+    Score 30-50: PAPER_TRADE (review system)
+    Score <30: STOP (full system review)
+
+Drawdown Controls:
+    - Weekly drawdown >5%: Pause new trades
+    - Monthly drawdown >10%: Reduce size 50%
+    - Total drawdown >20%: Stop system
+
+Output:
+    - Monday gap analysis saved to monday_premarket collection
+    - Position statuses updated in real-time
+    - Friday summaries saved to friday_summaries collection
+    - System health tracked continuously
 """
 
 import asyncio

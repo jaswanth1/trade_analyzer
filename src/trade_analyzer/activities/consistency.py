@@ -1,15 +1,42 @@
 """Weekly Return Consistency filter activities for Phase 3.
 
-Implements 9-metric consistency framework:
-1. Positive Weeks % (52W): ≥65%
-2. +3% Weeks % (52W): 25-35%
-3. +5% Weeks % (52W): 10-20%
-4. Weekly Std Dev (52W): 3-6%
-5. Avg Weekly Return (52W): ≥0.8%
-6. Sharpe Ratio (52W): ≥0.15
-7. Win Streak Probability (26W): ≥62%
-8. Consistency Score (52W): ≥75
-9. Regime Score (13W vs 52W): ≥1.2
+This module implements the weekly consistency screening that identifies stocks with
+reliable, repeatable weekly gains. This is the CRITICAL differentiator - most systems
+ignore weekly behavior patterns.
+
+Pipeline Position: Phase 3 (after Momentum Filter)
+Input: ~50-100 momentum-qualified stocks from Phase 2
+Output: ~30-50 consistency-qualified stocks
+
+Why Weekly Consistency Matters:
+- Weekend analysis, weekday execution model
+- Reduces whipsaw and false breakouts
+- Identifies stocks with institutional accumulation patterns
+- Statistical validation ensures signals aren't noise
+
+The 9-metric framework evaluates:
+1. Win rate consistency (positive weeks %)
+2. Magnitude consistency (+3%, +5% weeks)
+3. Volatility control (weekly std dev)
+4. Average performance (avg weekly return)
+5. Risk-adjusted returns (Sharpe ratio)
+6. Recent vs historical (regime score)
+
+Stocks must pass 5+ filters to qualify. Regime-adaptive thresholds adjust based on
+current market conditions (BULL/SIDEWAYS/BEAR).
+
+Metrics & Thresholds (52W lookback):
+    1. Positive Weeks %: ≥65% (BULL), ≥60% (SIDEWAYS), ≥55% (BEAR)
+    2. +3% Weeks %: 25-35% (sweet spot - not too volatile)
+    3. +5% Weeks %: 10-20% (explosive moves, but controlled)
+    4. Weekly Std Dev: 3-6% (consistency, not chaos)
+    5. Avg Weekly Return: ≥0.8% (compounds to 40%+ annually)
+    6. Sharpe Ratio: ≥0.15 (risk-adjusted performance)
+    7. Win Streak (26W): ≥62% (recent consistency)
+    8. Consistency Score: ≥75 (composite metric)
+    9. Regime Score: ≥1.2 (current regime outperforming)
+
+Expected Pass Rate: ~60% of momentum-qualified stocks
 """
 
 import time

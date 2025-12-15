@@ -1,10 +1,59 @@
 """Volume & Liquidity filter workflow for Phase 4A.
 
-This workflow:
-1. Fetches consistency-qualified stocks from Phase 3
-2. Calculates volume & liquidity metrics
-3. Filters by liquidity score, turnover, circuit hits
-4. Saves results to MongoDB
+This module implements Phase 4A of the trading pipeline, which applies volume
+and liquidity filters to ensure stocks are tradeable with minimal slippage.
+
+Pipeline Position: Phase 4A - Volume & Liquidity Filter
+-------------------------------------------------------
+Input: Consistency-qualified stocks from Phase 3 (~30-50 stocks)
+Output: Liquidity-qualified stocks (~15-25 stocks)
+
+This is the FOURTH filter focusing on tradability, ensuring positions can be
+entered and exited without significant market impact or gap risk.
+
+Workflow Flow:
+1. Fetch consistency-qualified symbols from Phase 3
+2. Calculate volume & liquidity metrics (batched)
+3. Filter by 4 liquidity criteria
+4. Save results to MongoDB liquidity_scores collection
+
+4 Liquidity Filters:
+- F1: Liquidity Score >= 75 (composite metric)
+- F2: 20D Avg Turnover >= 10 Cr (minimum tradable size)
+- F3: Circuit Hits (30D) <= 1 (no manipulation signs)
+- F4: Avg Gap <= 2% (predictable opening prices)
+
+Liquidity Score Calculation:
+- 40%: Volume consistency (CV < 0.5)
+- 30%: Average turnover (>=10 Cr)
+- 20%: Bid-ask spread (<0.5%)
+- 10%: Market depth (order book quality)
+
+Typical Funnel:
+~30-50 consistency -> ~25-40 analyzed -> ~15-25 liquidity-qualified
+
+Inputs:
+- batch_size: Number of stocks to process per batch (default 50)
+
+Outputs:
+- VolumeFilterResult containing:
+  - total_analyzed: Stocks analyzed
+  - total_qualified: Stocks passing all 4 filters
+  - avg_liquidity_score: Average liquidity score
+  - avg_turnover_20d: Average 20-day turnover in Crores
+  - top_10: Top 10 stocks by liquidity score
+
+Retry Policy:
+- Initial interval: 2 seconds
+- Maximum interval: 60 seconds
+- Maximum attempts: 3
+- Backoff coefficient: 2.0
+
+Typical Runtime: 5-8 minutes
+
+Related Workflows:
+- ConsistencyFilterWorkflow (Phase 3): Provides input
+- SetupDetectionWorkflow (Phase 4B): Uses output
 """
 
 from dataclasses import dataclass
@@ -24,7 +73,17 @@ with workflow.unsafe.imports_passed_through():
 
 @dataclass
 class VolumeFilterResult:
-    """Result of volume & liquidity filter workflow."""
+    """Result of volume & liquidity filter workflow.
+
+    Attributes:
+        success: True if workflow completed without errors
+        total_analyzed: Total stocks analyzed for liquidity
+        total_qualified: Stocks passing all 4 liquidity filters
+        avg_liquidity_score: Average liquidity score (0-100)
+        avg_turnover_20d: Average 20-day turnover in Crores (INR)
+        top_10: Top 10 stocks by liquidity score
+        error: Error message if workflow failed, None otherwise
+    """
 
     success: bool
     total_analyzed: int
@@ -37,16 +96,36 @@ class VolumeFilterResult:
 
 @workflow.defn
 class VolumeFilterWorkflow:
-    """
-    Workflow to apply volume & liquidity filters (Phase 4A).
+    """Workflow to apply volume & liquidity filters (Phase 4A).
 
-    Filters:
-    1. Liquidity Score >= 75
-    2. 20D Avg Turnover >= 10 Cr
-    3. Circuit Hits (30D) <= 1
-    4. Avg Gap <= 2%
+    This workflow orchestrates liquidity analysis to ensure stocks can be
+    traded without significant slippage, market impact, or gap risk.
 
-    Reduces ~30-50 consistency stocks to 15-25 liquid candidates.
+    Activities Orchestrated:
+    1. fetch_consistency_qualified_symbols: Gets stocks from Phase 3
+    2. calculate_volume_liquidity_batch: Calculates liquidity metrics
+    3. filter_by_liquidity: Applies 4 liquidity filters
+    4. save_liquidity_results: Saves to MongoDB liquidity_scores collection
+
+    4 Liquidity Filters (all must pass):
+    1. Liquidity Score >= 75 (composite metric)
+    2. 20D Avg Turnover >= 10 Cr (tradable size)
+    3. Circuit Hits (30D) <= 1 (no manipulation)
+    4. Avg Gap <= 2% (predictable entries)
+
+    Liquidity Score Components:
+    - Volume Consistency: CV < 0.5 (stable volume)
+    - Average Turnover: >= 10 Cr (sufficient liquidity)
+    - Bid-Ask Spread: < 0.5% (low transaction cost)
+    - Market Depth: Good order book quality
+
+    Error Handling:
+    - Batched processing with retries
+    - Saves all results (not just qualified)
+    - Returns partial results with error flag
+
+    Returns:
+        VolumeFilterResult with qualified stocks and statistics
     """
 
     @workflow.run

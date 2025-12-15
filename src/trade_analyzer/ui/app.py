@@ -1,4 +1,94 @@
-"""Main Streamlit application for Trade Analyzer."""
+"""
+Main Streamlit application for Trade Analyzer.
+
+This is the primary UI dashboard for the institutional-grade weekly trading system.
+It provides a comprehensive interface for managing the 8-phase trade analysis pipeline.
+
+Dashboard Structure:
+    - Sidebar: Navigation and DB connection status
+    - Pages:
+      * Dashboard: Main control center with all phase metrics and controls
+      * Regime: Market regime analysis and probabilities
+      * Setups: Trade setup filtering and details
+      * Trades: Active/closed trades and performance metrics
+      * Settings: System configuration and risk parameters
+
+Main Dashboard Features:
+
+    1. Phase 1 - Universe Setup:
+       - NSE EQ count, MTF count, quality tiers
+       - Fundamental qualification stats
+       - Buttons: "Setup Universe", "Refresh Fund. (Monthly)"
+
+    2. Phase 2 - Momentum Filter:
+       - Momentum qualified count, pass rate
+       - Buttons: "Run Momentum Filter", "Full Weekend Run"
+
+    3. Phase 3 - Consistency Filter:
+       - Consistency qualified count, market regime
+       - Buttons: "Run Consistency Filter", "Full Pipeline (1-3)"
+
+    4. Phase 4A - Volume & Liquidity:
+       - Liquidity qualified count, pass rate
+       - Buttons: "Run Volume Filter", "Phase 4 Pipeline"
+
+    5. Phase 4B - Setup Detection:
+       - Trade setups count, qualified rate
+       - Buttons: "Run Setup Detection", "Full Analysis (1-4)"
+
+    6. Fundamental Data Cache:
+       - Monthly refresh of fundamental data
+       - Applied automatically in Phase 1
+       - Button: "Refresh Data (Monthly)"
+
+    7. Phase 5-6 - Risk & Portfolio:
+       - Risk qualified, final positions, risk %, cash %
+       - Buttons: "Run Risk Geometry", "Run Portfolio"
+
+    8. Phase 7 - Execution Display:
+       - Pre-market enter/skip counts, system health
+       - Buttons: "Pre-Market", "Position Status", "Friday Close"
+
+    9. Phase 8 - Weekly Recommendations:
+       - Recommendations count, allocated %, status, regime
+       - Buttons: "Generate Recommendations", "FULL WEEKLY PIPELINE"
+
+    10. Stock Universe Tabs:
+        - Trade Setups: All qualified trade opportunities
+        - Liquidity Qualified: Stocks passing liquidity filters
+        - Consistency Qualified: Stocks with statistical consistency
+        - Momentum Qualified: Stocks with strong momentum
+        - High Quality: Stocks with quality score >= 60
+        - All Stocks: Complete universe with pagination
+
+Workflow Execution:
+    - All buttons trigger Temporal workflows via asyncio.run()
+    - Workflows execute synchronously with progress spinners
+    - Success/error messages displayed after completion
+    - Dashboard auto-refreshes on workflow completion
+
+Database Integration:
+    - Auto-connects to MongoDB on startup using config
+    - Displays real-time stats from database collections
+    - Supports pagination for large datasets (50 items/page)
+    - Search functionality for symbol filtering
+
+Architecture:
+    - Single-file Streamlit app (no multi-page structure)
+    - Session state for pagination and search
+    - Direct MongoDB queries for real-time data
+    - Async workflow execution via helper functions
+
+Usage:
+    $ streamlit run src/trade_analyzer/ui/app.py
+    $ make ui  # Convenient Make target
+
+Dependencies:
+    - streamlit: UI framework
+    - pandas: Data display
+    - MongoDB: Data storage
+    - Temporal: Workflow execution
+"""
 
 from datetime import datetime
 
@@ -31,7 +121,18 @@ def init_db_connection():
 
 
 def render_sidebar():
-    """Render the sidebar navigation."""
+    """
+    Render the sidebar navigation.
+
+    Displays:
+        - App title
+        - Database connection status (green=connected, red=disconnected)
+        - Navigation radio buttons for page selection
+        - Error message if DB connection failed
+
+    Returns:
+        str: Selected page name ("Dashboard", "Regime", "Setups", "Trades", "Settings")
+    """
     with st.sidebar:
         st.title("Trade Analyzer")
         st.markdown("---")
@@ -57,7 +158,41 @@ def render_sidebar():
 
 
 def render_dashboard():
-    """Render the main dashboard page with all functionality."""
+    """
+    Render the main dashboard page with all functionality.
+
+    This is the primary interface showing:
+        - Summary metrics for all 8 pipeline phases
+        - Control buttons to trigger workflows
+        - Last updated timestamps for each phase
+        - Tabbed stock universe views with pagination
+
+    Layout:
+        1. Phase 1 metrics + Universe Setup button
+        2. Phase 2 metrics + Momentum Filter buttons
+        3. Phase 3 metrics + Consistency Filter buttons
+        4. Phase 4A metrics + Volume Filter buttons
+        5. Phase 4B metrics + Setup Detection buttons
+        6. Fundamental cache stats + Monthly Refresh button
+        7. Phase 5-6 metrics + Risk/Portfolio buttons
+        8. Phase 7 metrics + Execution workflow buttons
+        9. Phase 8 metrics + Recommendation buttons
+        10. Stock universe tabs (setups, liquidity, consistency, momentum, quality, all)
+
+    Database Collections Used:
+        - stocks: Universe data
+        - momentum_scores: Phase 2 results
+        - consistency_scores: Phase 3 results
+        - liquidity_scores: Phase 4A results
+        - trade_setups: Phase 4B results
+        - fundamental_scores: Fundamental cache
+        - institutional_holdings: Holdings cache
+        - position_sizes: Phase 5 results
+        - portfolio_allocations: Phase 6 results
+        - monday_premarket: Phase 7 pre-market analysis
+        - friday_summaries: Phase 7 weekly summary
+        - weekly_recommendations: Phase 8 final output
+    """
     st.header("Trade Analyzer Dashboard")
 
     if not st.session_state.get("db_connected"):
@@ -131,11 +266,17 @@ def render_dashboard():
     setups_updated = setups_latest.get("detected_at") if setups_latest else None
     setup_regime = setups_latest.get("market_regime", market_regime) if setups_latest else market_regime
 
+    # Get fundamental qualification stats (Phase 1 now includes fundamental filter)
+    fundamentally_qualified = db.stocks.count_documents({
+        "is_active": True,
+        "fundamentally_qualified": True,
+    })
+
     # Top row: Stats and buttons
     col_stats, col_action = st.columns([4, 1])
 
     with col_stats:
-        stat_cols = st.columns(6)
+        stat_cols = st.columns(7)
         with stat_cols[0]:
             st.metric("Total NSE EQ", total_nse_eq)
         with stat_cols[1]:
@@ -143,15 +284,22 @@ def render_dashboard():
         with stat_cols[2]:
             st.metric("High Quality", high_quality)
         with stat_cols[3]:
-            st.metric("Tier A", tier_a)
+            st.metric("Fund. Qualified", fundamentally_qualified)
         with stat_cols[4]:
-            st.metric("Tier B", tier_b)
+            st.metric("Tier A", tier_a)
         with stat_cols[5]:
+            st.metric("Tier B", tier_b)
+        with stat_cols[6]:
             st.metric("Tier C", tier_c)
 
     with col_action:
-        if st.button("Setup Universe", type="primary"):
-            _run_universe_setup()
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("Setup Universe", type="primary"):
+                _run_universe_setup()
+        with col_btn2:
+            if st.button("Refresh Fund. (Monthly)", type="secondary"):
+                _run_fundamental_data_refresh()
 
     # Last updated info
     if last_updated:
@@ -295,10 +443,11 @@ def render_dashboard():
 
     st.markdown("---")
 
-    # Phase 5: Fundamental Intelligence Section
-    st.subheader("Fundamental Intelligence (Phase 5)")
+    # Fundamental Data Cache Section (Monthly refresh, applied in Phase 1)
+    st.subheader("Fundamental Data Cache (Monthly Refresh)")
+    st.caption("Fundamentals are now applied in Phase 1. Run monthly to refresh cached data.")
 
-    # Get Phase 5 stats
+    # Get fundamental cache stats
     fund_qualified = db.fundamental_scores.count_documents({"qualifies": True})
     fund_total = db.fundamental_scores.count_documents({})
     inst_qualified = db.institutional_holdings.count_documents({"qualifies": True})
@@ -309,30 +458,30 @@ def render_dashboard():
     fund_col1, fund_col2, fund_col3, fund_col4, fund_col5 = st.columns([1, 1, 1, 1, 2])
 
     with fund_col1:
-        st.metric("Fundamental Qualified", fund_qualified)
+        st.metric("Fundamental Scores", fund_qualified)
     with fund_col2:
-        st.metric("Institutional Qualified", inst_qualified)
+        st.metric("Institutional Data", inst_qualified)
     with fund_col3:
-        st.metric("Total Analyzed", fund_total)
+        st.metric("Total Cached", fund_total)
     with fund_col4:
         if fund_total > 0:
             fund_pass_rate = (fund_qualified / fund_total) * 100
-            st.metric("Pass Rate", f"{fund_pass_rate:.1f}%")
+            st.metric("Qualified %", f"{fund_pass_rate:.1f}%")
         else:
-            st.metric("Pass Rate", "N/A")
+            st.metric("Qualified %", "N/A")
     with fund_col5:
-        if st.button("Run Fundamental Filter", type="secondary", key="fund_btn"):
-            _run_fundamental_filter()
+        if st.button("Refresh Data (Monthly)", type="secondary", key="fund_btn"):
+            _run_fundamental_data_refresh()
 
     if fund_updated:
-        st.caption(f"Fundamental data updated: {fund_updated}")
+        st.caption(f"Fundamental data refreshed: {fund_updated}")
     else:
-        st.caption("No fundamental analysis yet - Click 'Run Fundamental Filter'")
+        st.caption("No fundamental data cached - Run 'Refresh Data (Monthly)'")
 
     st.markdown("---")
 
-    # Phase 6-7: Risk & Portfolio Section
-    st.subheader("Risk & Portfolio (Phase 6-7)")
+    # Phase 5-6: Risk & Portfolio Section (was Phase 6-7)
+    st.subheader("Risk & Portfolio (Phase 5-6)")
 
     # Get Phase 6-7 stats
     risk_qualified = db.position_sizes.count_documents({"risk_qualifies": True})
@@ -369,8 +518,8 @@ def render_dashboard():
 
     st.markdown("---")
 
-    # Phase 8: Execution Display Section
-    st.subheader("Execution Display (Phase 8)")
+    # Phase 7: Execution Display Section (was Phase 8)
+    st.subheader("Execution Display (Phase 7)")
 
     # Get Phase 8 stats
     premarket_doc = db.monday_premarket.find_one(sort=[("analysis_date", -1)])
@@ -407,8 +556,8 @@ def render_dashboard():
 
     st.markdown("---")
 
-    # Phase 9: Weekly Recommendations Section
-    st.subheader("Weekly Recommendations (Phase 9)")
+    # Phase 8: Weekly Recommendations Section (was Phase 9)
+    st.subheader("Weekly Recommendations (Phase 8)")
 
     # Get Phase 9 stats
     rec_doc = db.weekly_recommendations.find_one(
@@ -587,7 +736,34 @@ def render_paginated_stock_list(
     title: str,
     show_quality: bool = False,
 ):
-    """Render a paginated stock list with search."""
+    """
+    Render a paginated stock list with search.
+
+    Generic function to display any stock list with pagination and search.
+    Used for displaying universe stocks, high-quality stocks, etc.
+
+    Args:
+        db: MongoDB database connection
+        base_query: Base MongoDB query dict (e.g., {"is_active": True})
+        total_count: Total number of documents matching base query
+        page_key: Session state key for pagination (must be unique per list)
+        search_key: Session state key for search box (must be unique per list)
+        title: Display title for the list
+        show_quality: If True, display quality-related columns (score, tier, indices)
+
+    Features:
+        - 50 items per page
+        - Symbol search with case-insensitive regex
+        - Prev/Next pagination buttons
+        - Shows "X-Y of Z" counter
+        - Resets to page 1 on new search
+        - Sorts by quality_score (desc) if show_quality=True
+
+    UI Components:
+        - Search text input
+        - Dataframe with configurable columns
+        - Pagination controls (Prev, Page X of Y, Next)
+    """
     PAGE_SIZE = 50
 
     # Make a copy of the query to avoid modifying the original
@@ -996,7 +1172,36 @@ def render_liquidity_stocks(db):
 
 
 def render_trade_setups(db):
-    """Render the trade setups list."""
+    """
+    Render the trade setups list.
+
+    Displays all qualified trade setups from Phase 4B (Setup Detection).
+    This is the main output showing actionable trading opportunities.
+
+    Features:
+        - Filters by setup type (PULLBACK, VCP_BREAKOUT, RETEST, GAP_FILL)
+        - Shows only qualified and active setups
+        - Displays entry zones, stops, targets, R:R ratio
+        - Includes quality scores from previous phases
+        - 20 items per page
+        - Sorted by rank (best setups first)
+
+    Columns Displayed:
+        - rank: Setup ranking (1 = best)
+        - symbol: Stock ticker
+        - type: Technical pattern type
+        - entry_low/entry_high: Entry price range
+        - stop: Stop-loss price
+        - target_1/target_2: Profit targets
+        - rr_ratio: Reward-to-risk ratio
+        - confidence: Setup confidence score
+        - overall_quality: Combined quality from all phases
+        - momentum_score, consistency_score, liquidity_score
+
+    UI Behavior:
+        - Shows "No setups found" if none available
+        - Updates after running Setup Detection workflow
+    """
     PAGE_SIZE = 20
 
     # Initialize session state for pagination
@@ -1096,7 +1301,26 @@ def render_trade_setups(db):
 
 
 def _run_universe_setup():
-    """Run the universe setup workflow via Temporal."""
+    """
+    Run the universe setup workflow via Temporal.
+
+    This is the Phase 1 workflow that:
+        - Fetches NSE EQ instruments from Upstox
+        - Fetches MTF instrument list
+        - Fetches Nifty 50/100/500 constituents
+        - Calculates quality scores (A/B/C/D tiers)
+        - Applies fundamental filter using cached data
+        - Saves everything to MongoDB
+
+    Duration: 2-5 minutes
+    Runs: Weekly (typically Saturday morning)
+
+    UI Behavior:
+        - Shows spinner with progress message
+        - Displays success message with stats on completion
+        - Auto-refreshes dashboard on success
+        - Shows error message on failure
+    """
     import asyncio
 
     from trade_analyzer.workers.start_workflow import start_universe_setup
@@ -1121,7 +1345,25 @@ def _run_universe_setup():
 
 
 def _run_momentum_filter():
-    """Run the momentum filter workflow via Temporal."""
+    """
+    Run the momentum filter workflow via Temporal.
+
+    This is the Phase 2 workflow that:
+        - Fetches historical price data for high-quality stocks
+        - Calculates 52-week high proximity
+        - Analyzes MA alignment (50/200 DMA)
+        - Computes relative strength vs Nifty 50
+        - Checks volatility ratio
+        - Scores and qualifies stocks (4+ filters pass)
+
+    Duration: 10-15 minutes
+    Runs: Weekly (after Phase 1)
+
+    UI Behavior:
+        - Shows spinner with estimated time
+        - Displays qualified count and top 10 stocks
+        - Auto-refreshes dashboard
+    """
     import asyncio
 
     from trade_analyzer.workers.start_workflow import start_momentum_filter
@@ -1391,26 +1633,47 @@ def _run_full_analysis():
 
 
 # ============================================================================
-# Phase 5-9 Workflow Runners
+# Monthly Fundamental Data Refresh + Phase 5-8 Workflow Runners
 # ============================================================================
 
 
-def _run_fundamental_filter():
-    """Run the fundamental filter workflow via Temporal."""
+def _run_fundamental_data_refresh():
+    """
+    Run the MONTHLY fundamental data refresh workflow via Temporal.
+
+    This is a monthly maintenance workflow (NOT part of weekly pipeline) that:
+        - Fetches fundamental metrics from FMP/Alpha Vantage APIs
+        - Calculates fundamental scores (PE, ROE, debt ratios, etc.)
+        - Fetches institutional holding percentages
+        - Caches all data in MongoDB
+        - Data is used by Phase 1 for weekly filtering
+
+    Duration: 30-60 minutes (API rate limits)
+    Runs: Monthly (after quarterly earnings)
+    Cost: API calls (respects rate limits)
+
+    UI Behavior:
+        - Shows long-running spinner with time estimate
+        - Displays cached data stats on completion
+        - Explains this feeds into Phase 1
+    """
     import asyncio
 
-    from trade_analyzer.workers.start_workflow import start_fundamental_filter
+    from trade_analyzer.workers.start_workflow import start_fundamental_data_refresh
 
-    with st.spinner("Running Fundamental Filter... This may take 15-30 minutes."):
+    with st.spinner("Running Fundamental Data Refresh (Monthly)... This may take 30-60 minutes."):
         try:
-            result = asyncio.run(start_fundamental_filter())
+            result = asyncio.run(start_fundamental_data_refresh())
 
             if result["success"]:
                 st.success(
-                    f"Fundamental Filter complete!\n\n"
+                    f"Fundamental Data Refresh complete!\n\n"
+                    f"This data will be used by Phase 1 (Universe Setup) for weekly filtering.\n\n"
                     f"- Symbols Analyzed: {result['symbols_analyzed']}\n"
+                    f"- Fundamental Saved: {result['fundamental_saved']}\n"
                     f"- Fundamental Qualified: {result['fundamental_qualified']}\n"
-                    f"- Institutional Qualified: {result['institutional_qualified']}\n"
+                    f"- Holdings Saved: {result['holdings_saved']}\n"
+                    f"- Holdings Qualified: {result['holdings_qualified']}\n"
                     f"- Combined Qualified: {result['combined_qualified']}\n"
                     f"- Avg Score: {result['avg_fundamental_score']:.1f}\n\n"
                     f"Top 10 by Fundamental Score:\n"
@@ -1424,6 +1687,11 @@ def _run_fundamental_filter():
                 st.error(f"Workflow failed: {result['error']}")
         except Exception as e:
             st.error(f"Failed to run workflow: {e}")
+
+
+def _run_fundamental_filter():
+    """Run the fundamental filter workflow via Temporal (legacy - uses data refresh)."""
+    _run_fundamental_data_refresh()
 
 
 def _run_risk_geometry():
@@ -1613,7 +1881,27 @@ def _run_weekly_recommendation():
 
 
 def _run_complete_weekly_pipeline():
-    """Run the complete weekly pipeline (Phase 4B-9) via Temporal."""
+    """
+    Run the complete weekly pipeline (Phase 4B-8) via Temporal.
+
+    This is the MASTER WEEKEND WORKFLOW that runs the entire system end-to-end:
+        - Phase 4B: Setup Detection (technical patterns)
+        - Phase 5: Risk Geometry (position sizing)
+        - Phase 6: Portfolio Construction (correlation, sector limits)
+        - Phase 8: Weekly Recommendations (final trade list)
+
+    Assumes Phase 1-4A already completed earlier in the week.
+
+    Duration: 45-60 minutes
+    Runs: Saturday/Sunday (main weekend analysis)
+    Output: 3-7 trade recommendations for Monday
+
+    UI Behavior:
+        - Shows long-running spinner
+        - Displays full pipeline summary
+        - Shows final recommendation count and allocation
+        - This is the "one-click" weekend run button
+    """
     import asyncio
 
     from trade_analyzer.workers.start_workflow import start_complete_weekly_pipeline
@@ -1647,7 +1935,26 @@ def _run_complete_weekly_pipeline():
 
 
 def render_settings():
-    """Render the settings page."""
+    """
+    Render the settings page.
+
+    Displays system configuration and parameters:
+        - Database connection status with disconnect option
+        - Risk parameters (editable via number inputs):
+          * Max risk per trade (%)
+          * Max sector exposure (%)
+          * Min reward:risk ratio
+          * Max stop distance (%)
+
+    Note:
+        Currently for display only. Parameter changes not yet persisted
+        to database. Will be implemented in future version.
+
+    UI Components:
+        - Connection status indicator
+        - Disconnect button (if connected)
+        - Risk parameter input controls (2 columns)
+    """
     st.header("Settings")
 
     st.subheader("Database Configuration")
@@ -1676,7 +1983,23 @@ def render_settings():
 
 
 def run_app():
-    """Main entry point for the Streamlit app."""
+    """
+    Main entry point for the Streamlit app.
+
+    This function:
+        1. Initializes database connection
+        2. Renders sidebar navigation
+        3. Routes to appropriate page based on selection
+
+    Pages:
+        - Dashboard: Main control center (default)
+        - Regime: Market regime analysis (placeholder)
+        - Setups: Trade setup filtering (placeholder)
+        - Trades: Trade tracking and performance (placeholder)
+        - Settings: System configuration
+
+    Called automatically when running as a script or via streamlit run.
+    """
     init_db_connection()
 
     page = render_sidebar()

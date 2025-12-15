@@ -1,11 +1,68 @@
 """Technical Setup Detection workflow for Phase 4B.
 
-This workflow:
-1. Fetches liquidity-qualified stocks from Phase 4A
-2. Detects technical setups (Pullback, VCP, Retest, Gap-Fill)
-3. Filters by R:R ratio, confidence, stop distance
-4. Enriches with scores from previous phases
-5. Saves final trade setups to MongoDB
+This module implements Phase 4B of the trading pipeline, which detects specific
+technical setups with clear entry, stop, and target levels.
+
+Pipeline Position: Phase 4B - Setup Detection
+---------------------------------------------
+Input: Liquidity-qualified stocks from Phase 4A (~15-25 stocks)
+Output: Trade setups with risk geometry (~8-15 setups)
+
+This is the FIFTH filter (Phase 4B) focusing on identifying actionable trade
+setups with defined risk-reward profiles.
+
+Workflow Flow:
+1. Fetch liquidity-qualified symbols from Phase 4A
+2. Detect current market regime for R:R adjustment
+3. Detect technical setups (batched with rate limiting)
+4. Filter by R:R ratio, confidence, stop distance
+5. Enrich with context from previous phases
+6. Save to MongoDB trade_setups collection
+
+4 Setup Types Detected:
+- A. PULLBACK: Trend pullback to rising moving averages (most common)
+- B. VCP_BREAKOUT: Volatility contraction pattern breakout (high win rate)
+- C. RETEST: Breakout retest / role reversal (lower risk)
+- D. GAP_FILL: Gap-fill continuation play (rare but powerful)
+
+Setup Requirements (all must pass):
+- R:R Ratio >= 2.0 (Risk-On) or >= 2.5 (Choppy/Bear)
+- Confidence >= 70 (pattern quality score)
+- Stop Distance <= 7% from entry
+- Clear entry zone defined
+- Multiple exit targets (T1, T2)
+
+Typical Funnel:
+~15-25 liquid -> ~12-20 analyzed -> ~8-15 setups qualified
+
+Inputs:
+- batch_size: Stocks to process per batch (default 30)
+- min_rr_ratio: Minimum R:R (default 2.0, adjusted by regime)
+- min_confidence: Minimum setup confidence (default 70)
+
+Outputs:
+- SetupDetectionResult containing:
+  - total_analyzed: Stocks analyzed
+  - total_setups_found: Raw setups detected
+  - total_qualified: Setups passing filters
+  - setups_by_type: Count per setup type
+  - avg_confidence: Average setup confidence
+  - avg_rr_ratio: Average reward:risk ratio
+  - market_regime: Current regime
+  - top_setups: Top setups by composite score
+
+Retry Policy:
+- Initial interval: 2 seconds
+- Maximum interval: 60 seconds
+- Maximum attempts: 3
+- Backoff coefficient: 2.0
+
+Typical Runtime: 10-15 minutes
+
+Related Workflows:
+- VolumeFilterWorkflow (Phase 4A): Provides input
+- RiskGeometryWorkflow (Phase 6): Uses output
+- Phase4PipelineWorkflow: Orchestrates Phase 4A+4B
 """
 
 from dataclasses import dataclass
@@ -28,7 +85,20 @@ with workflow.unsafe.imports_passed_through():
 
 @dataclass
 class SetupDetectionResult:
-    """Result of setup detection workflow."""
+    """Result of setup detection workflow.
+
+    Attributes:
+        success: True if workflow completed without errors
+        total_analyzed: Total stocks analyzed for setups
+        total_setups_found: Raw setups detected (before filtering)
+        total_qualified: Setups passing R:R, confidence, stop filters
+        setups_by_type: Count breakdown (PULLBACK, VCP_BREAKOUT, RETEST, GAP_FILL)
+        avg_confidence: Average setup confidence score (0-100)
+        avg_rr_ratio: Average reward:risk ratio across qualified setups
+        market_regime: Current market regime (BULL/SIDEWAYS/BEAR)
+        top_setups: Top setups by composite score (max 10)
+        error: Error message if workflow failed, None otherwise
+    """
 
     success: bool
     total_analyzed: int
@@ -44,16 +114,43 @@ class SetupDetectionResult:
 
 @workflow.defn
 class SetupDetectionWorkflow:
-    """
-    Workflow to detect technical trade setups (Phase 4B).
+    """Workflow to detect technical trade setups (Phase 4B).
 
-    Setup Types:
-    A. PULLBACK: Trend pullback to support
-    B. VCP_BREAKOUT: Volatility contraction breakout
-    C. RETEST: Breakout retest (role reversal)
-    D. GAP_FILL: Gap-fill continuation
+    This workflow orchestrates setup detection by analyzing price action
+    patterns and calculating risk-reward geometry for each potential trade.
 
-    Reduces ~15-25 liquid stocks to 8-15 actionable setups.
+    Activities Orchestrated:
+    1. fetch_liquidity_qualified_symbols: Gets stocks from Phase 4A
+    2. detect_current_regime: Gets regime for R:R adjustment
+    3. detect_setups_batch: Scans for 4 setup types with pattern matching
+    4. filter_and_rank_setups: Applies R:R, confidence, stop filters
+    5. enrich_setups_with_context: Adds scores from previous phases
+    6. save_setup_results: Saves to MongoDB trade_setups collection
+
+    4 Setup Types:
+    - A. PULLBACK: Trend pullback to rising MA (most common, 50-60% of setups)
+    - B. VCP_BREAKOUT: Volatility contraction breakout (highest win rate)
+    - C. RETEST: Breakout retest/role reversal (cleanest entries)
+    - D. GAP_FILL: Gap-fill continuation (rare but powerful)
+
+    Setup Quality Scoring:
+    - Pattern Clarity: 30% (clean vs messy)
+    - Volume Confirmation: 25% (volume surge on setup day)
+    - Trend Strength: 20% (MA alignment)
+    - Support/Resistance: 15% (clear levels)
+    - Risk-Reward: 10% (favorable R:R)
+
+    Regime Adjustment:
+    - Risk-On: min_rr = 2.0
+    - Choppy/Bear: min_rr = 2.5 (higher bar)
+
+    Error Handling:
+    - Batched processing with retries
+    - Returns setups even if some stocks fail
+    - Partial results with error flag
+
+    Returns:
+        SetupDetectionResult with qualified setups and statistics
     """
 
     @workflow.run

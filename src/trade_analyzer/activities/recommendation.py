@@ -1,9 +1,88 @@
 """Recommendation activities for Phase 9.
 
-This module implements:
-1. Aggregating results from all previous phases
-2. Generating recommendation templates
-3. Saving weekly recommendations to MongoDB
+This module implements the final recommendation generation phase that packages
+all analysis into user-friendly recommendation cards ready for review and execution.
+
+Pipeline Position: Phase 9 (Final Output)
+Input: 3-10 portfolio positions from Phase 7
+Output: 3-7 weekly recommendation cards (typical)
+
+The recommendation system:
+- Aggregates ALL data from Phases 1-7
+- Enriches with real-time context
+- Generates formatted templates
+- Saves with approval workflow
+
+Recommendation Card Contents:
+
+1. Stock Identification
+    - Symbol, company name, sector
+    - Week display (e.g., "Week of Dec 18, 2025")
+
+2. Quality Scores (All Phases)
+    - Momentum score (Phase 2)
+    - Consistency score (Phase 3)
+    - Liquidity score (Phase 4A)
+    - Fundamental score (Phase 1/5)
+    - Setup confidence (Phase 4B)
+    - Final conviction (composite)
+
+3. Technical Context
+    - Current price
+    - 52W high/low and % from high
+    - 20/50/200 DMA levels
+    - Recent price action
+
+4. Trade Parameters
+    - Setup type (A+/B+/C+/D)
+    - Entry zone: low-high range
+    - Stop loss: price and method
+    - Stop distance: % from entry
+    - Target 1: 2R level
+    - Target 2: 3R+ level
+    - R:R ratios
+
+5. Position Sizing
+    - Shares to buy
+    - Investment amount (Rs)
+    - Risk amount (Rs)
+    - Position % of portfolio
+
+6. Action Steps (3-5 bullet points)
+    - When to enter
+    - Where to set stop
+    - When to take profits
+    - Trailing stop guidance
+
+7. Gap Contingency Plan
+    - If gaps up >2%: Action
+    - If gaps down >2%: Action
+    - If in entry zone: Action
+
+Workflow States:
+    1. draft: Initial generation (requires approval)
+    2. approved: User has approved (ready for execution)
+    3. expired: Week ended (archived)
+
+Expiration Logic:
+    - Recommendations expire after 1 week
+    - Prevents stale recommendations
+    - Auto-cleanup on next run
+
+Output Format:
+    - Structured dict (for UI display)
+    - Text template (for sharing/printing)
+    - Saved to weekly_recommendations collection
+
+Typical Use:
+    1. System generates recommendations Saturday/Sunday
+    2. User reviews and approves
+    3. Monday pre-market: Gap analysis
+    4. Execute approved setups
+    5. Friday: Week summary
+    6. Next week: New recommendations
+
+Expected Output: 3-7 recommendation cards per week
 """
 
 from datetime import datetime, timedelta

@@ -1,8 +1,78 @@
 """Fundamental Data Provider for Phase 5.
 
-Integrates with:
-- Financial Modeling Prep (FMP) API for financial statements
-- Alpha Vantage API for company overview data
+This module provides fundamental analysis capabilities by integrating with
+Financial Modeling Prep (FMP) API for comprehensive financial statements,
+metrics, and valuation data.
+
+Data Sources:
+    - Financial Modeling Prep (FMP): https://financialmodelingprep.com/api/v3
+      - Income statements (quarterly)
+      - Balance sheets (quarterly)
+      - Cash flow statements (quarterly)
+      - Key financial metrics (ROE, ROCE, etc.)
+
+    - Alpha Vantage (optional): https://www.alphavantage.co/query
+      - Company overview data
+
+Rate Limits:
+    - FMP Free Tier: 250 requests/day
+    - FMP Premium: 300 requests/minute
+    - Alpha Vantage Free: 5 requests/minute, 500/day
+    - Recommended: Cache results, batch requests
+
+Symbol Format:
+    - NSE stocks use .NS suffix (e.g., "RELIANCE.NS")
+    - Automatic conversion handled by provider
+
+Usage:
+    Basic fundamental data fetching:
+
+    >>> from trade_analyzer.data.providers.fundamental import FundamentalDataProvider
+    >>>
+    >>> # Initialize with API keys
+    >>> provider = FundamentalDataProvider(
+    ...     fmp_api_key="your_fmp_key",
+    ...     av_api_key="your_av_key"
+    ... )
+    >>>
+    >>> # Fetch comprehensive fundamental data
+    >>> fund_data = provider.fetch_fundamental_data("RELIANCE")
+    >>> if fund_data:
+    ...     print(f"EPS QoQ Growth: {fund_data.eps_qoq_growth:.1f}%")
+    ...     print(f"Revenue YoY Growth: {fund_data.revenue_yoy_growth:.1f}%")
+    ...     print(f"ROCE: {fund_data.roce:.1f}%")
+    ...     print(f"ROE: {fund_data.roe:.1f}%")
+    ...     print(f"D/E: {fund_data.debt_equity:.2f}")
+    >>>
+    >>> # Calculate fundamental score
+    >>> score = provider.calculate_fundamental_score(fund_data, sector="Energy")
+    >>> print(f"Fundamental Score: {score['fundamental_score']:.1f}/100")
+    >>> print(f"Passes {score['filters_passed']}/5 filters")
+    >>> print(f"Qualifies: {score['qualifies']}")
+
+    Individual statements:
+
+    >>> # Fetch specific statements
+    >>> income = provider.fetch_income_statement("TCS", limit=4)  # 4 quarters
+    >>> balance = provider.fetch_balance_sheet("TCS", limit=2)
+    >>> cash_flow = provider.fetch_cash_flow("TCS", limit=2)
+    >>> metrics = provider.fetch_key_metrics("TCS", limit=2)
+
+Scoring System:
+    The fundamental score (0-100) is calculated as:
+    - 30% Growth (EPS QoQ + Revenue YoY)
+    - 25% Profitability (ROCE + ROE)
+    - 20% Leverage (Debt/Equity ratio)
+    - 15% Cash Flow (FCF Yield)
+    - 10% Earnings Quality (Cash EPS vs Reported EPS)
+
+    A stock qualifies if it passes at least 3 of 5 fundamental filters.
+
+Notes:
+    - Returns None gracefully on API failures
+    - Handles different sector thresholds (financials vs non-financials)
+    - All growth rates as percentages, returns as decimals
+    - Requires at least 2 quarters of data for meaningful analysis
 """
 
 import logging
@@ -17,7 +87,37 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class FundamentalData:
-    """Fundamental data for a stock."""
+    """Fundamental data for a stock.
+
+    Comprehensive fundamental metrics extracted from financial statements.
+
+    Attributes:
+        symbol: Stock symbol
+        eps_current: Current quarter EPS
+        eps_previous: Previous quarter EPS
+        eps_qoq_growth: EPS quarter-over-quarter growth (%)
+        revenue_current: Current quarter revenue
+        revenue_previous: Previous year same quarter revenue
+        revenue_yoy_growth: Revenue year-over-year growth (%)
+        roce: Return on Capital Employed (%)
+        roe: Return on Equity (%)
+        debt_equity: Debt to Equity ratio
+        total_debt: Total debt amount
+        total_equity: Total shareholder equity
+        opm_margin: Operating Profit Margin (%)
+        opm_previous: Previous quarter OPM (%)
+        opm_trend: Margin trend ("improving", "stable", "declining")
+        operating_cash_flow: Operating cash flow
+        capex: Capital expenditure
+        free_cash_flow: Free cash flow (OCF - CapEx)
+        fcf_yield: FCF Yield (FCF/Market Cap) (%)
+        market_cap: Market capitalization
+        cash_eps: Cash EPS (OCF per share)
+        reported_eps: Reported EPS
+        earnings_quality_score: Ratio of cash EPS to reported EPS
+        fetched_at: Timestamp of fetch
+        data_source: Data source identifier
+    """
 
     symbol: str
     # Growth metrics
@@ -58,7 +158,22 @@ class FundamentalData:
 
 
 class FundamentalDataProvider:
-    """Provider for fundamental data from FMP and Alpha Vantage APIs."""
+    """Provider for fundamental data from FMP and Alpha Vantage APIs.
+
+    Main provider for fetching and analyzing fundamental financial data.
+    Integrates with FMP API for comprehensive financial statements and
+    calculates multi-dimensional fundamental scores.
+
+    Attributes:
+        fmp_api_key: Financial Modeling Prep API key
+        av_api_key: Alpha Vantage API key
+        session: Requests session for API calls
+
+    Example:
+        >>> provider = FundamentalDataProvider("fmp_key", "av_key")
+        >>> data = provider.fetch_fundamental_data("RELIANCE")
+        >>> score = provider.calculate_fundamental_score(data, "Energy")
+    """
 
     FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
     AV_BASE_URL = "https://www.alphavantage.co/query"
@@ -81,7 +196,20 @@ class FundamentalDataProvider:
         )
 
     def _convert_to_nse_symbol(self, symbol: str) -> str:
-        """Convert internal symbol to NSE format for API calls."""
+        """Convert internal symbol to NSE format for API calls.
+
+        Args:
+            symbol: Internal stock symbol (e.g., "RELIANCE")
+
+        Returns:
+            NSE format symbol with .NS suffix (e.g., "RELIANCE.NS")
+
+        Example:
+            >>> provider._convert_to_nse_symbol("RELIANCE")
+            'RELIANCE.NS'
+            >>> provider._convert_to_nse_symbol("TCS.NS")
+            'TCS.NS'
+        """
         # FMP uses .NS suffix for NSE stocks
         if not symbol.endswith(".NS"):
             return f"{symbol}.NS"

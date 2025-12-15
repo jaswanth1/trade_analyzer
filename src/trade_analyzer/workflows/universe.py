@@ -1,4 +1,48 @@
-"""Universe refresh workflow for Trade Analyzer."""
+"""Universe refresh workflow for Trade Analyzer.
+
+This module implements the basic universe refresh workflow that fetches
+trading instruments from Upstox API and stores them in MongoDB.
+
+Pipeline Position: Initial Data Setup (Pre-Phase 1)
+---------------------------------------------------
+This workflow is a prerequisite for the main pipeline. It should be run
+before UniverseSetupWorkflow to ensure the database has fresh instrument data.
+
+Workflow Flow:
+1. Fetch NSE equity instruments from Upstox API
+2. Fetch MTF (Margin Trading Facility) instruments from Upstox API
+3. Merge NSE EQ and MTF data
+4. Save instruments to MongoDB stocks collection
+
+Inputs:
+- None (fetches fresh data from Upstox API)
+
+Outputs:
+- UniverseRefreshResult containing:
+  - success: Whether the workflow completed successfully
+  - nse_eq_count: Number of NSE equity instruments fetched
+  - mtf_count: Number of MTF instruments fetched
+  - saved_count: Number of instruments saved to database
+  - error: Error message if workflow failed
+
+Retry Policy:
+- Initial interval: 1 second
+- Maximum interval: 30 seconds
+- Maximum attempts: 3
+- Backoff coefficient: 2.0
+
+Typical Runtime: 1-2 minutes
+
+Usage:
+    This workflow should be run:
+    - Once per week before weekend analysis (Saturday/Sunday)
+    - After Upstox instrument master updates
+    - When setting up a fresh database
+
+Related Workflows:
+- UniverseSetupWorkflow: Uses output from this workflow to create
+  high-quality universe with scoring
+"""
 
 from dataclasses import dataclass
 from datetime import timedelta
@@ -17,7 +61,15 @@ with workflow.unsafe.imports_passed_through():
 
 @dataclass
 class UniverseRefreshResult:
-    """Result of universe refresh workflow."""
+    """Result of universe refresh workflow.
+
+    Attributes:
+        success: True if workflow completed without errors
+        nse_eq_count: Total NSE equity instruments fetched from Upstox
+        mtf_count: Total MTF instruments fetched from Upstox
+        saved_count: Total instruments saved to MongoDB stocks collection
+        error: Error message if workflow failed, None otherwise
+    """
 
     success: bool
     nse_eq_count: int
@@ -28,13 +80,27 @@ class UniverseRefreshResult:
 
 @workflow.defn
 class UniverseRefreshWorkflow:
-    """
-    Workflow to refresh the trading universe from Upstox.
+    """Workflow to refresh the trading universe from Upstox.
 
-    This workflow:
-    1. Fetches NSE equity instruments
-    2. Fetches MTF instruments
-    3. Merges and saves to MongoDB
+    This workflow orchestrates the fetching and storage of trading instruments
+    from Upstox API. It runs three sequential activities with retry policies
+    to ensure reliable data acquisition.
+
+    Activities Orchestrated:
+    1. refresh_nse_instruments: Fetches NSE equity instruments (NSE_EQ segment)
+    2. refresh_mtf_instruments: Fetches MTF-eligible instruments
+    3. save_instruments_to_db: Merges data and saves to MongoDB
+
+    The workflow marks MTF stocks with is_mtf=True flag for prioritization
+    in subsequent universe setup workflows.
+
+    Error Handling:
+    - Each activity has independent retry policy (3 attempts)
+    - Workflow catches all exceptions and returns error result
+    - Failed workflow does not modify existing database
+
+    Returns:
+        UniverseRefreshResult with counts and status
     """
 
     @workflow.run

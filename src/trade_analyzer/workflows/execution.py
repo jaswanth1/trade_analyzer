@@ -1,11 +1,96 @@
 """Execution workflows for Phase 8.
 
-This module implements:
-1. PreMarketAnalysisWorkflow - Monday 8:30-9:15 AM gap analysis
-2. PositionStatusWorkflow - Intraday position updates
-3. FridayCloseWorkflow - Week summary and system health
+This module implements Phase 8 execution workflows that provide real-time
+trade monitoring and gap analysis. These are DISPLAY ONLY workflows - no
+actual order placement or broker integration.
 
-NOTE: This is UI display only - no actual order placement.
+Pipeline Position: Phase 8 - Execution Display & Monitoring
+-----------------------------------------------------------
+Input: Final portfolio from Phase 7 (3-7 positions)
+Output: Trade execution guidance and position monitoring
+
+This module provides THREE workflow types for different weekday activities:
+1. PreMarketAnalysisWorkflow: Monday 8:30-9:15 AM gap analysis
+2. PositionStatusWorkflow: Intraday position status updates
+3. FridayCloseWorkflow: End-of-week summary and system health
+
+IMPORTANT: This is UI display only - no actual order placement or broker API
+integration. User must manually execute trades based on recommendations.
+
+Workflow 1: PreMarketAnalysisWorkflow (Monday 8:30-9:15 AM)
+-----------------------------------------------------------
+Analyzes Monday opening gaps and determines entry actions for each setup.
+
+Gap Contingency Rules:
+- Gap through stop (< stop_loss): SKIP (invalidated)
+- Small gap against (<2% below entry): ENTER_AT_OPEN (acceptable)
+- Gap above entry (>2% above): SKIP (don't chase)
+- Within entry zone: ENTER (normal entry)
+
+Outputs:
+- Gap analysis for each position
+- Sector momentum assessment
+- Entry/Skip/Wait recommendations
+
+Workflow 2: PositionStatusWorkflow (Intraday)
+---------------------------------------------
+Updates current position status, P&L, and alerts throughout trading day.
+
+Monitors:
+- Current price vs entry/stop/targets
+- Unrealized P&L (INR and R-multiples)
+- Stop-loss proximity alerts
+- Target achievement notifications
+
+Outputs:
+- Position status (in_profit/in_loss/stopped_out/target_hit)
+- Current P&L and R-multiples
+- Real-time alerts
+
+Workflow 3: FridayCloseWorkflow (Friday Close)
+----------------------------------------------
+Generates end-of-week summary with system health assessment.
+
+Calculates:
+- Weekly P&L (realized + unrealized)
+- Win rate and R-multiple statistics
+- System health score (0-100)
+- Recommended action (CONTINUE/REDUCE/PAUSE/STOP)
+
+System Health Scoring:
+- Score >= 70: CONTINUE normally
+- Score 50-70: REDUCE sizes, review parameters
+- Score 30-50: PAUSE new trades, paper trade only
+- Score < 30: STOP trading, full system review
+
+Health Metrics:
+- Win rate (12W and 52W)
+- Expectancy (12W)
+- Average slippage
+- Current drawdown
+- Consistency vs backtest
+
+Outputs:
+- Weekly performance summary
+- Open/closed positions
+- System health score
+- Recommended action
+
+Retry Policy (All Workflows):
+- Initial interval: 2 seconds
+- Maximum interval: 30 seconds
+- Maximum attempts: 3
+- Backoff coefficient: 2.0
+
+Typical Runtimes:
+- PreMarket: 2-3 minutes
+- Position Status: 1-2 minutes
+- Friday Close: 3-5 minutes
+
+Related Workflows:
+- PortfolioConstructionWorkflow (Phase 7): Provides input
+- WeeklyRecommendationWorkflow (Phase 8): Parallel workflow
+- ExecutionDisplayWorkflow: Master execution coordinator
 """
 
 from dataclasses import dataclass
@@ -31,7 +116,20 @@ with workflow.unsafe.imports_passed_through():
 
 @dataclass
 class PreMarketAnalysisResult:
-    """Result of pre-market analysis workflow."""
+    """Result of pre-market analysis workflow.
+
+    Attributes:
+        success: True if workflow completed without errors
+        analysis_date: ISO format date of analysis
+        nifty_gap_pct: Nifty 50 gap percentage vs previous close
+        total_setups: Total setups analyzed
+        enter_count: Setups recommended to ENTER
+        skip_count: Setups recommended to SKIP
+        wait_count: Setups recommended to WAIT
+        gap_analyses: Detailed gap analysis per setup
+        sector_momentum: Sector-wise momentum assessment
+        error: Error message if workflow failed, None otherwise
+    """
 
     success: bool
     analysis_date: str
@@ -47,16 +145,33 @@ class PreMarketAnalysisResult:
 
 @workflow.defn
 class PreMarketAnalysisWorkflow:
-    """
-    Monday Pre-Market Analysis Workflow.
+    """Monday Pre-Market Analysis Workflow.
 
-    Runs Monday 8:30-9:15 AM to analyze gaps and determine
-    which setups to enter, skip, or wait on.
+    This workflow analyzes Monday opening gaps for all weekend recommendations
+    and determines entry/skip/wait actions based on gap contingency rules.
+
+    Activities Orchestrated:
+    1. get_latest_portfolio_allocation: Gets weekend recommendations
+    2. fetch_current_prices: Gets pre-market/opening prices
+    3. analyze_monday_gaps: Applies gap contingency logic
+    4. calculate_sector_momentum: Assesses sector strength
+    5. save_monday_premarket_analysis: Saves to MongoDB
 
     Gap Contingency Rules:
-    - Gap through stop: SKIP
-    - Small gap against (<2%): ENTER_AT_OPEN
-    - Gap above entry (>2%): SKIP (don't chase)
+    - Gap through stop (< stop_loss): SKIP (setup invalidated)
+    - Small gap against (<2% below entry): ENTER_AT_OPEN (acceptable)
+    - Gap above entry (>2% above): SKIP (don't chase, wait for pullback)
+    - Within entry zone: ENTER (normal entry as planned)
+
+    Timing: Should be run Monday 8:30-9:15 AM IST (pre-market window)
+
+    Error Handling:
+    - Returns empty result if no portfolio found
+    - Continues even if some prices unavailable
+    - Partial results with error flag
+
+    Returns:
+        PreMarketAnalysisResult with gap analysis and recommendations
     """
 
     @workflow.run

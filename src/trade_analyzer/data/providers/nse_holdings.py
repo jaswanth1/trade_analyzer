@@ -1,6 +1,69 @@
 """NSE Shareholding Pattern Provider for Phase 5.
 
-Fetches institutional ownership data (FII/DII/Promoter) from NSE India.
+This module provides institutional ownership analysis by fetching shareholding
+patterns from NSE India. It tracks FII (Foreign Institutional Investors),
+DII (Domestic Institutional Investors), promoter holdings, and pledge data.
+
+Data Source:
+    - NSE India API: https://www.nseindia.com/api/corporate-shareholding
+    - NSE Bulk Deals: https://www.nseindia.com/api/historical/bulk-deals
+
+Rate Limits:
+    - No official rate limits documented
+    - NSE requires session cookies before API access
+    - Recommended: 0.5-1 second delay between requests
+    - Max 10 requests per minute recommended
+
+Data Update Frequency:
+    - Shareholding pattern: Updated quarterly after company filings
+    - Bulk deals: Updated daily after market close
+    - Historical data: Limited to recent periods
+
+Usage:
+    Fetch shareholding pattern:
+
+    >>> from trade_analyzer.data.providers.nse_holdings import NSEHoldingsProvider
+    >>>
+    >>> provider = NSEHoldingsProvider()
+    >>>
+    >>> # Fetch shareholding data
+    >>> holdings = provider.fetch_shareholding_pattern("RELIANCE")
+    >>> if holdings:
+    ...     print(f"FII: {holdings.fii_holding_pct}%")
+    ...     print(f"DII: {holdings.dii_holding_pct}%")
+    ...     print(f"Total Institutional: {holdings.total_institutional}%")
+    ...     print(f"Promoter: {holdings.promoter_holding_pct}%")
+    ...     print(f"Promoter Pledge: {holdings.promoter_pledge_pct}%")
+
+    Calculate holding score:
+
+    >>> # Calculate qualification score
+    >>> score = provider.calculate_holding_score(holdings)
+    >>> print(f"Holding Score: {score['holding_score']:.1f}/100")
+    >>> print(f"Passes institutional min: {score['passes_institutional_min']}")
+    >>> print(f"Passes pledge check: {score['passes_pledge']}")
+    >>> print(f"Qualifies: {score['qualifies']}")
+
+    Track FII activity via bulk deals:
+
+    >>> # Fetch recent bulk deals
+    >>> deals = provider.fetch_bulk_deals("RELIANCE", days=30)
+    >>> if deals:
+    ...     print(f"FII Net: {deals['fii_net_cr']} Cr")
+    ...     print(f"FII Trend: {deals['fii_trend']}")
+
+Qualification Criteria:
+    A stock qualifies for institutional ownership filter if:
+    1. Total institutional holding (FII + DII) >= 35%
+    2. FII trend is not "selling"
+    3. Promoter pledge <= 20%
+
+Notes:
+    - NSE blocks requests without proper headers and cookies
+    - Session management handled automatically via singleton pattern
+    - Returns None gracefully on failures
+    - Shareholding data may be 1-2 quarters old
+    - Pledge data critical for risk assessment
 """
 
 import logging
@@ -16,7 +79,22 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class InstitutionalHolding:
-    """Institutional holding data for a stock."""
+    """Institutional holding data for a stock.
+
+    Container for ownership and shareholding pattern data.
+
+    Attributes:
+        symbol: Stock symbol
+        fii_holding_pct: Foreign Institutional Investor holding (%)
+        fii_net_30d: FII net buying/selling in last 30 days (Crores)
+        fii_trend: FII activity trend ("buying", "neutral", "selling")
+        dii_holding_pct: Domestic Institutional Investor holding (%)
+        total_institutional: Combined FII + DII holding (%)
+        promoter_holding_pct: Promoter holding (%)
+        promoter_pledge_pct: Percentage of promoter shares pledged (%)
+        public_holding_pct: Public shareholding (%)
+        fetched_at: Timestamp of fetch
+    """
 
     symbol: str
     # FII holdings
@@ -41,7 +119,20 @@ class InstitutionalHolding:
 
 
 class NSEHoldingsProvider:
-    """Provider for NSE shareholding pattern data."""
+    """Provider for NSE shareholding pattern data.
+
+    Fetches and analyzes institutional ownership data from NSE India.
+    Manages session with cookies and provides holding qualification scoring.
+
+    Attributes:
+        _session: Persistent session with NSE cookies
+        _cookies_set: Flag indicating cookie initialization status
+
+    Example:
+        >>> provider = NSEHoldingsProvider()
+        >>> holdings = provider.fetch_shareholding_pattern("TCS")
+        >>> score = provider.calculate_holding_score(holdings)
+    """
 
     NSE_BASE_URL = "https://www.nseindia.com"
 
@@ -56,12 +147,26 @@ class NSEHoldingsProvider:
     }
 
     def __init__(self):
-        """Initialize the NSE holdings provider."""
+        """Initialize the NSE holdings provider.
+
+        Creates a new provider instance. Session is lazily initialized
+        on first request to obtain NSE cookies.
+        """
         self._session: Optional[requests.Session] = None
         self._cookies_set = False
 
     def _get_session(self) -> requests.Session:
-        """Get or create a session with NSE cookies."""
+        """Get or create a session with NSE cookies.
+
+        NSE India requires cookies from a homepage visit before allowing
+        API access. This method manages that session lifecycle.
+
+        Returns:
+            requests.Session with valid NSE cookies
+
+        Raises:
+            None (handles errors gracefully with logging)
+        """
         if self._session is None or not self._cookies_set:
             self._session = requests.Session()
             self._session.headers.update(self.NSE_HEADERS)
@@ -168,15 +273,28 @@ class NSEHoldingsProvider:
             return None
 
     def fetch_bulk_deals(self, symbol: str, days: int = 30) -> Optional[dict]:
-        """
-        Fetch recent bulk/block deals to estimate FII activity.
+        """Fetch recent bulk/block deals to estimate FII activity.
+
+        Analyzes bulk deal data to track institutional buying/selling activity.
+        This provides more real-time insight than quarterly shareholding data.
 
         Args:
-            symbol: NSE stock symbol
-            days: Lookback period in days
+            symbol: NSE stock symbol (e.g., "RELIANCE")
+            days: Lookback period in days (default 30)
 
         Returns:
-            Dict with deal summary or None.
+            Dict with keys:
+                - fii_buy_cr: Total FII buying (Crores)
+                - fii_sell_cr: Total FII selling (Crores)
+                - fii_net_cr: Net FII activity (Crores)
+                - fii_trend: "buying", "selling", or "neutral"
+            None if data unavailable
+
+        Example:
+            >>> deals = provider.fetch_bulk_deals("INFY", days=30)
+            >>> if deals:
+            ...     if deals['fii_net_cr'] > 100:
+            ...         print("Strong FII buying interest")
         """
         session = self._get_session()
 
@@ -229,19 +347,40 @@ class NSEHoldingsProvider:
     def calculate_holding_score(
         self, holding: InstitutionalHolding
     ) -> dict:
-        """
-        Calculate institutional holding score and qualification.
+        """Calculate institutional holding score and qualification.
 
-        Criteria:
-        - FII + DII >= 35%
-        - FII net buying >= 0 (not selling)
-        - Promoter pledge <= 20%
+        Evaluates ownership structure against trading system criteria.
+        High institutional ownership indicates quality and liquidity.
+        Low promoter pledge reduces governance risk.
+
+        Qualification Criteria:
+        1. Total institutional holding (FII + DII) >= 35%
+        2. FII trend is not "selling"
+        3. Promoter pledge <= 20%
+
+        Scoring:
+        - 70% weight on institutional holding (50% = max score)
+        - 30% weight on low pledge (0% pledge = max score)
 
         Args:
-            holding: InstitutionalHolding object
+            holding: InstitutionalHolding object with ownership data
 
         Returns:
-            Dict with scores and qualification status.
+            Dict with keys:
+                - holding_score: Overall score (0-100)
+                - passes_institutional_min: Boolean for 35% threshold
+                - passes_fii_trend: Boolean for FII not selling
+                - passes_pledge: Boolean for pledge <= 20%
+                - qualifies: True if all 3 criteria pass
+                - Plus all original holding fields
+
+        Example:
+            >>> holdings = provider.fetch_shareholding_pattern("HDFC")
+            >>> score = provider.calculate_holding_score(holdings)
+            >>> if score['qualifies']:
+            ...     print(f"Qualified with score: {score['holding_score']:.1f}")
+            >>> else:
+            ...     print(f"Failed {3 - sum([score['passes_institutional_min'], score['passes_fii_trend'], score['passes_pledge']])} criteria")
         """
         # Institutional threshold: >= 35%
         passes_institutional_min = holding.total_institutional >= 35

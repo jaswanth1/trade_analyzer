@@ -1,9 +1,71 @@
 """Portfolio Construction activities for Phase 7.
 
-This module implements:
-1. Correlation filter (max 0.70)
-2. Sector limit enforcement (3 per sector, 25% max)
-3. Final portfolio selection with constraints
+This module implements the final portfolio assembly phase that applies diversification
+constraints to create a balanced, risk-controlled portfolio.
+
+Pipeline Position: Phase 7 (after Risk Geometry)
+Input: 5-12 position-sized setups from Phase 6
+Output: 3-10 final portfolio positions (typically 3-7)
+
+The portfolio construction enforces institutional-grade risk management:
+- Diversification: Prevents over-concentration
+- Correlation control: Avoids correlated positions
+- Sector limits: No sector dominance
+- Cash reserve: Maintains dry powder
+- Regime awareness: Adjusts exposure based on market
+
+Five-Layer Constraint System:
+
+Layer 1: Position Count Limits (Regime-Adaptive)
+    - Risk-On: Max 10 positions
+    - Choppy: Max 5 positions
+    - Risk-Off: 0 positions (no new trades)
+    Logic: Reduce exposure in unfavorable regimes
+
+Layer 2: Correlation Filter (Max 0.70)
+    - Calculates 60-day return correlations
+    - Greedy algorithm: Always keep best setup
+    - Rejects subsequent setups correlated >0.70
+    Logic: Avoid false diversification (correlated assets move together)
+
+Layer 3: Sector Concentration Limits
+    - Max 3 positions per sector
+    - Max 25% portfolio in any sector
+    Logic: Sector-specific risk control
+
+Layer 4: Single Position Size Limit
+    - Max 8% of portfolio per position
+    Logic: No single position can destroy portfolio
+
+Layer 5: Cash Reserve Requirement
+    - Target: 20-30% cash reserve
+    - Actual: 100% - total_invested%
+    Logic: Dry powder for opportunities, margin of safety
+
+Portfolio Construction Algorithm:
+
+1. Start with position-sized setups (sorted by overall_quality)
+2. Apply correlation filter (removes ~20-40%)
+3. Apply sector limits (removes ~10-20%)
+4. Apply position count limit (regime-adjusted)
+5. Validate cash reserve (typically passes)
+6. Calculate final allocations and exposures
+
+Output Validation Checks:
+    ✓ Position count ≤ regime max
+    ✓ Max correlation ≤ 0.70
+    ✓ Sector exposure ≤ 25%
+    ✓ Single position ≤ 8%
+    ✓ Cash reserve ≥ 20%
+    ✓ Total risk ≤ 15% of portfolio
+
+Portfolio Status:
+    - Initial: "pending" (requires user approval)
+    - After approval: "approved"
+    - After week end: "expired"
+
+Expected Output: 3-10 positions (sweet spot: 5-7)
+Pass Rate: 60-80% of input setups make final portfolio
 """
 
 import asyncio

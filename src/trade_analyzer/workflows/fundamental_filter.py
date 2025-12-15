@@ -1,13 +1,18 @@
-"""Fundamental Intelligence workflow for Phase 5.
+"""Fundamental Data Refresh workflow.
 
-This workflow:
-1. Fetches symbols from Phase 4B trade setups
-2. Fetches fundamental data from FMP/Alpha Vantage
+This workflow runs MONTHLY to fetch and cache fundamental data for the universe.
+It is NOT part of the weekly pipeline - fundamentals are applied in Phase 1
+using cached data (no API calls).
+
+Steps:
+1. Fetches high-quality symbols from stocks collection
+2. Fetches fundamental data from FMP/Alpha Vantage (with rate limiting)
 3. Calculates multi-dimensional fundamental scores
 4. Fetches institutional holdings from NSE
-5. Saves results to MongoDB
+5. Saves results to MongoDB (fundamental_scores, institutional_holdings)
 
-Reduces ~15-25 liquid stocks to 8-12 fundamentally qualified.
+The weekly Phase 1 (UniverseSetupWorkflow) then applies fundamental filter
+using this cached data.
 """
 
 from dataclasses import dataclass
@@ -21,19 +26,38 @@ with workflow.unsafe.imports_passed_through():
         calculate_fundamental_scores,
         fetch_fundamental_data_batch,
         fetch_institutional_holdings_batch,
-        fetch_setup_qualified_symbols,
+        fetch_universe_for_fundamentals,
         save_fundamental_results,
     )
 
 
 @dataclass
-class FundamentalFilterResult:
-    """Result of fundamental filter workflow."""
+class FundamentalDataRefreshResult:
+    """Result of fundamental data refresh workflow.
+
+    This result contains statistics from the MONTHLY fundamental data refresh,
+    NOT the weekly pipeline. The data refreshed here is cached and used by
+    Phase 1 (UniverseSetupWorkflow) during weekly runs.
+
+    Attributes:
+        success: True if workflow completed without errors
+        symbols_analyzed: Total stocks analyzed for fundamentals
+        fundamental_saved: Fundamental scores saved to database
+        fundamental_qualified: Stocks passing fundamental filters (>=60 score)
+        holdings_saved: Institutional holdings data saved
+        holdings_qualified: Stocks with sufficient institutional holding (>=35%)
+        combined_qualified: Stocks passing both fundamental and institutional
+        avg_fundamental_score: Average fundamental score (0-100)
+        top_10: Top 10 stocks by fundamental score
+        error: Error message if workflow failed, None otherwise
+    """
 
     success: bool
     symbols_analyzed: int
+    fundamental_saved: int
     fundamental_qualified: int
-    institutional_qualified: int
+    holdings_saved: int
+    holdings_qualified: int
     combined_qualified: int
     avg_fundamental_score: float
     top_10: list[dict]
@@ -41,9 +65,16 @@ class FundamentalFilterResult:
 
 
 @workflow.defn
-class FundamentalFilterWorkflow:
+class FundamentalDataRefreshWorkflow:
     """
-    Workflow for Phase 5: Fundamental Intelligence.
+    MONTHLY workflow to refresh fundamental data for universe.
+
+    This workflow fetches fundamental data from external APIs and caches it
+    in MongoDB. It runs independently of the weekly pipeline (typically once
+    a month after quarterly results).
+
+    The weekly UniverseSetupWorkflow (Phase 1) applies fundamental filter
+    using this cached data - no API calls during weekly runs.
 
     Scoring Formula:
     FUNDAMENTAL_SCORE = 30% × Growth + 25% × Profitability +
@@ -59,12 +90,14 @@ class FundamentalFilterWorkflow:
     @workflow.run
     async def run(
         self,
+        min_quality_score: float = 60.0,
         fetch_delay: float = 1.0,
-    ) -> FundamentalFilterResult:
+    ) -> FundamentalDataRefreshResult:
         """
-        Execute the fundamental filter workflow.
+        Execute the fundamental data refresh workflow.
 
         Args:
+            min_quality_score: Minimum quality score for stocks to analyze
             fetch_delay: Delay between API calls (respecting rate limits)
         """
         retry_policy = RetryPolicy(
@@ -74,37 +107,44 @@ class FundamentalFilterWorkflow:
             backoff_coefficient=2.0,
         )
 
-        workflow.logger.info("Starting Fundamental Filter Workflow (Phase 5)")
+        workflow.logger.info(
+            "Starting Fundamental Data Refresh Workflow (Monthly)"
+        )
 
         try:
-            # Step 1: Get setup-qualified symbols from Phase 4B
-            workflow.logger.info("Step 1: Fetching setup-qualified symbols...")
+            # Step 1: Get high-quality symbols from universe
+            workflow.logger.info(
+                f"Step 1: Fetching high-quality symbols (min_score={min_quality_score})..."
+            )
             symbols = await workflow.execute_activity(
-                fetch_setup_qualified_symbols,
+                fetch_universe_for_fundamentals,
+                args=[min_quality_score],
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=retry_policy,
             )
-            workflow.logger.info(f"Found {len(symbols)} setup-qualified symbols")
+            workflow.logger.info(f"Found {len(symbols)} high-quality symbols")
 
             if not symbols:
-                return FundamentalFilterResult(
+                return FundamentalDataRefreshResult(
                     success=True,
                     symbols_analyzed=0,
+                    fundamental_saved=0,
                     fundamental_qualified=0,
-                    institutional_qualified=0,
+                    holdings_saved=0,
+                    holdings_qualified=0,
                     combined_qualified=0,
                     avg_fundamental_score=0,
                     top_10=[],
-                    error="No setup-qualified symbols found. Run Setup Detection first.",
+                    error="No high-quality symbols found. Run Universe Setup first.",
                 )
 
             # Step 2: Fetch fundamental data from FMP
-            # Longer timeout due to API rate limits
+            # Longer timeout due to API rate limits (could take 30+ mins for 500+ stocks)
             workflow.logger.info("Step 2: Fetching fundamental data from FMP...")
             fundamental_data = await workflow.execute_activity(
                 fetch_fundamental_data_batch,
                 args=[symbols, fetch_delay],
-                start_to_close_timeout=timedelta(minutes=30),
+                start_to_close_timeout=timedelta(minutes=60),
                 retry_policy=retry_policy,
             )
             workflow.logger.info(
@@ -112,11 +152,13 @@ class FundamentalFilterWorkflow:
             )
 
             if not fundamental_data:
-                return FundamentalFilterResult(
+                return FundamentalDataRefreshResult(
                     success=False,
                     symbols_analyzed=len(symbols),
+                    fundamental_saved=0,
                     fundamental_qualified=0,
-                    institutional_qualified=0,
+                    holdings_saved=0,
+                    holdings_qualified=0,
                     combined_qualified=0,
                     avg_fundamental_score=0,
                     top_10=[],
@@ -128,7 +170,7 @@ class FundamentalFilterWorkflow:
             fundamental_scores = await workflow.execute_activity(
                 calculate_fundamental_scores,
                 args=[fundamental_data],
-                start_to_close_timeout=timedelta(minutes=5),
+                start_to_close_timeout=timedelta(minutes=10),
                 retry_policy=retry_policy,
             )
 
@@ -136,13 +178,13 @@ class FundamentalFilterWorkflow:
             workflow.logger.info("Step 4: Fetching institutional holdings...")
             holdings = await workflow.execute_activity(
                 fetch_institutional_holdings_batch,
-                args=[symbols, 0.5],
-                start_to_close_timeout=timedelta(minutes=15),
+                args=[symbols, 0.5],  # Faster delay for holdings
+                start_to_close_timeout=timedelta(minutes=30),
                 retry_policy=retry_policy,
             )
 
             # Step 5: Save results to MongoDB
-            workflow.logger.info("Step 5: Saving results...")
+            workflow.logger.info("Step 5: Saving results to database...")
             stats = await workflow.execute_activity(
                 save_fundamental_results,
                 args=[fundamental_scores, holdings],
@@ -166,28 +208,33 @@ class FundamentalFilterWorkflow:
             ]
 
             workflow.logger.info(
-                f"Fundamental Filter complete: {stats['fundamental_qualified']} fundamental, "
+                f"Fundamental Data Refresh complete: "
+                f"{stats['fundamental_qualified']} fundamental, "
                 f"{stats['holdings_qualified']} institutional, "
                 f"{stats['combined_qualified']} combined qualified"
             )
 
-            return FundamentalFilterResult(
+            return FundamentalDataRefreshResult(
                 success=True,
                 symbols_analyzed=len(symbols),
+                fundamental_saved=stats["fundamental_saved"],
                 fundamental_qualified=stats["fundamental_qualified"],
-                institutional_qualified=stats["holdings_qualified"],
+                holdings_saved=stats["holdings_saved"],
+                holdings_qualified=stats["holdings_qualified"],
                 combined_qualified=stats["combined_qualified"],
                 avg_fundamental_score=round(stats["avg_fundamental_score"], 1),
                 top_10=top_10,
             )
 
         except Exception as e:
-            workflow.logger.error(f"Fundamental Filter failed: {e}")
-            return FundamentalFilterResult(
+            workflow.logger.error(f"Fundamental Data Refresh failed: {e}")
+            return FundamentalDataRefreshResult(
                 success=False,
                 symbols_analyzed=0,
+                fundamental_saved=0,
                 fundamental_qualified=0,
-                institutional_qualified=0,
+                holdings_saved=0,
+                holdings_qualified=0,
                 combined_qualified=0,
                 avg_fundamental_score=0,
                 top_10=[],
@@ -195,114 +242,6 @@ class FundamentalFilterWorkflow:
             )
 
 
-@dataclass
-class Phase5PipelineResult:
-    """Result of Phase 4B + Phase 5 pipeline."""
-
-    success: bool
-    # Phase 4B stats
-    setups_analyzed: int
-    setups_found: int
-    # Phase 5 stats
-    fundamental_qualified: int
-    institutional_qualified: int
-    combined_qualified: int
-    avg_fundamental_score: float
-    top_setups: list[dict]
-    error: str | None = None
-
-
-@workflow.defn
-class Phase5PipelineWorkflow:
-    """
-    Complete Phase 5 Pipeline: Setup Detection + Fundamental Filter.
-
-    Phase 4B: ~15-25 → ~8-15 (Setup Detection)
-    Phase 5: ~8-15 → ~8-12 (Fundamental Filter)
-    """
-
-    @workflow.run
-    async def run(self) -> Phase5PipelineResult:
-        """Execute Phase 4B + 5 pipeline."""
-        workflow.logger.info("Starting Phase 5 Pipeline (Setup + Fundamental)")
-
-        try:
-            # Import here to avoid circular imports
-            from trade_analyzer.workflows.setup_detection import SetupDetectionWorkflow
-
-            # Phase 4B: Setup Detection
-            workflow.logger.info("=== Phase 4B: Setup Detection ===")
-
-            setup_result = await workflow.execute_child_workflow(
-                SetupDetectionWorkflow.run,
-                args=[30, 2.0, 70],  # batch_size, min_rr, min_confidence
-                id=f"setup-detection-{workflow.info().workflow_id}",
-            )
-
-            if not setup_result.success:
-                return Phase5PipelineResult(
-                    success=False,
-                    setups_analyzed=0,
-                    setups_found=0,
-                    fundamental_qualified=0,
-                    institutional_qualified=0,
-                    combined_qualified=0,
-                    avg_fundamental_score=0,
-                    top_setups=[],
-                    error=f"Setup Detection failed: {setup_result.error}",
-                )
-
-            workflow.logger.info(
-                f"Setup Detection complete: {setup_result.total_qualified} qualified"
-            )
-
-            # Phase 5: Fundamental Filter
-            workflow.logger.info("=== Phase 5: Fundamental Filter ===")
-
-            fund_result = await workflow.execute_child_workflow(
-                FundamentalFilterWorkflow.run,
-                args=[1.0],  # fetch_delay
-                id=f"fundamental-filter-{workflow.info().workflow_id}",
-            )
-
-            if not fund_result.success:
-                return Phase5PipelineResult(
-                    success=False,
-                    setups_analyzed=setup_result.total_analyzed,
-                    setups_found=setup_result.total_setups_found,
-                    fundamental_qualified=0,
-                    institutional_qualified=0,
-                    combined_qualified=0,
-                    avg_fundamental_score=0,
-                    top_setups=setup_result.top_setups,
-                    error=f"Fundamental Filter failed: {fund_result.error}",
-                )
-
-            workflow.logger.info(
-                f"Fundamental Filter complete: {fund_result.combined_qualified} combined qualified"
-            )
-
-            return Phase5PipelineResult(
-                success=True,
-                setups_analyzed=setup_result.total_analyzed,
-                setups_found=setup_result.total_setups_found,
-                fundamental_qualified=fund_result.fundamental_qualified,
-                institutional_qualified=fund_result.institutional_qualified,
-                combined_qualified=fund_result.combined_qualified,
-                avg_fundamental_score=fund_result.avg_fundamental_score,
-                top_setups=fund_result.top_10,
-            )
-
-        except Exception as e:
-            workflow.logger.error(f"Phase 5 Pipeline failed: {e}")
-            return Phase5PipelineResult(
-                success=False,
-                setups_analyzed=0,
-                setups_found=0,
-                fundamental_qualified=0,
-                institutional_qualified=0,
-                combined_qualified=0,
-                avg_fundamental_score=0,
-                top_setups=[],
-                error=str(e),
-            )
+# Keep old names as aliases for backward compatibility during transition
+FundamentalFilterWorkflow = FundamentalDataRefreshWorkflow
+FundamentalFilterResult = FundamentalDataRefreshResult

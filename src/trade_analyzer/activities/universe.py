@@ -1,4 +1,23 @@
-"""Universe refresh activities for Temporal workflows."""
+"""Universe refresh activities for Temporal workflows.
+
+This module implements basic universe data fetching and storage activities.
+It's part of the initial universe setup phase that runs periodically to maintain
+the trading universe with current market data.
+
+Pipeline Position: Phase 0 (Initial Setup)
+- Fetches NSE EQ instruments from Upstox API
+- Fetches MTF (Margin Trading Facility) instruments
+- Transforms and stores in MongoDB stocks collection
+
+Activities:
+    - refresh_nse_instruments: Fetch all NSE equity instruments
+    - refresh_mtf_instruments: Fetch MTF-eligible symbols
+    - save_instruments_to_db: Save transformed data to MongoDB
+    - get_universe_stats: Get current universe statistics
+
+Note: This is the basic version. For full quality-scored universe setup,
+see universe_setup.py which implements the UniverseSetupWorkflow.
+"""
 
 import gzip
 import json
@@ -33,7 +52,18 @@ class UniverseStats:
 
 
 def _fetch_gzip_json(url: str) -> list[dict]:
-    """Fetch and decompress gzipped JSON from URL."""
+    """Fetch and decompress gzipped JSON from URL.
+
+    Args:
+        url: URL to fetch gzipped JSON from
+
+    Returns:
+        List of dictionaries from decompressed JSON data
+
+    Raises:
+        requests.HTTPError: If HTTP request fails
+        json.JSONDecodeError: If JSON parsing fails
+    """
     response = requests.get(url, timeout=60)
     response.raise_for_status()
 
@@ -44,7 +74,20 @@ def _fetch_gzip_json(url: str) -> list[dict]:
 
 
 def _filter_nse_equity(instruments: list[dict]) -> list[dict]:
-    """Filter for NSE equity instruments only (no futures/options)."""
+    """Filter for NSE equity instruments only (no futures/options).
+
+    Filters instrument list to include only:
+    - segment == "NSE_EQ" (equity segment)
+    - instrument_type == "EQ" (equity type)
+
+    This excludes derivatives, futures, options, and other non-equity instruments.
+
+    Args:
+        instruments: List of all instruments from Upstox API
+
+    Returns:
+        Filtered list containing only NSE equity instruments
+    """
     return [
         inst
         for inst in instruments
@@ -53,7 +96,21 @@ def _filter_nse_equity(instruments: list[dict]) -> list[dict]:
 
 
 def _transform_instrument(instrument: dict, is_mtf: bool = False) -> dict:
-    """Transform Upstox instrument to stock document format."""
+    """Transform Upstox instrument to stock document format.
+
+    Converts Upstox API format to our internal stock document schema.
+    Sets default values for fields that will be enriched later:
+    - sector/industry: Set to "Unknown", enriched by fundamentals
+    - market_cap: Set to 0.0, enriched by fundamentals
+    - avg_daily_turnover: Set to 0.0, enriched by market data
+
+    Args:
+        instrument: Raw instrument dict from Upstox API
+        is_mtf: Whether this instrument is MTF-eligible
+
+    Returns:
+        Transformed stock document ready for MongoDB insertion
+    """
     return {
         "symbol": instrument.get("trading_symbol", ""),
         "name": instrument.get("name", ""),
@@ -78,11 +135,25 @@ def _transform_instrument(instrument: dict, is_mtf: bool = False) -> dict:
 
 @activity.defn
 async def refresh_nse_instruments() -> InstrumentData:
-    """
-    Fetch NSE equity instruments from Upstox.
+    """Fetch NSE equity instruments from Upstox.
+
+    Fetches the complete list of NSE equity instruments from Upstox's
+    public instruments API. The data is compressed (gzip) and contains
+    all tradable instruments on NSE.
+
+    This activity filters to include only equity instruments (NSE_EQ segment)
+    and excludes derivatives, futures, and options.
 
     Returns:
-        InstrumentData with list of NSE EQ instruments.
+        InstrumentData: Contains:
+            - instruments: List of NSE EQ instrument dicts
+            - count: Number of instruments
+            - source: "NSE"
+            - fetched_at: ISO timestamp
+
+    Raises:
+        requests.HTTPError: If API request fails
+        json.JSONDecodeError: If response parsing fails
     """
     activity.logger.info("Fetching NSE instruments from Upstox...")
 
@@ -101,11 +172,26 @@ async def refresh_nse_instruments() -> InstrumentData:
 
 @activity.defn
 async def refresh_mtf_instruments() -> InstrumentData:
-    """
-    Fetch MTF instruments from Upstox.
+    """Fetch MTF (Margin Trading Facility) instruments from Upstox.
+
+    MTF instruments are stocks eligible for margin trading, which indicates:
+    - Higher liquidity standards
+    - Lower volatility requirements
+    - Exchange-approved quality criteria
+
+    MTF eligibility is a strong quality signal and receives the highest
+    priority in our quality scoring system (Phase 1).
 
     Returns:
-        InstrumentData with list of MTF instruments.
+        InstrumentData: Contains:
+            - instruments: List of MTF instrument dicts
+            - count: Number of MTF-eligible instruments
+            - source: "MTF"
+            - fetched_at: ISO timestamp
+
+    Raises:
+        requests.HTTPError: If API request fails
+        json.JSONDecodeError: If response parsing fails
     """
     activity.logger.info("Fetching MTF instruments from Upstox...")
 
@@ -126,15 +212,28 @@ async def save_instruments_to_db(
     nse_instruments: list[dict],
     mtf_symbols: set[str],
 ) -> dict:
-    """
-    Save instruments to MongoDB.
+    """Save instruments to MongoDB stocks collection.
+
+    Performs upsert operation for all instruments:
+    1. Marks all existing stocks as inactive
+    2. Upserts each NSE instrument with is_mtf flag
+    3. Creates necessary indexes for efficient querying
+
+    The is_mtf flag is critical for quality scoring in Phase 1.
 
     Args:
-        nse_instruments: List of NSE EQ instruments.
-        mtf_symbols: Set of MTF-eligible symbols.
+        nse_instruments: List of NSE EQ instrument dicts from Upstox
+        mtf_symbols: Set of symbols that are MTF-eligible
 
     Returns:
-        Dict with save statistics.
+        Dict with statistics:
+            - saved_count: Total instruments saved
+            - mtf_count: Number marked as MTF-eligible
+            - timestamp: When save completed
+
+    Side Effects:
+        - Updates MongoDB stocks collection
+        - Creates indexes: symbol (unique), is_mtf, is_active, instrument_key
     """
     from trade_analyzer.db import get_database
 
@@ -182,11 +281,18 @@ async def save_instruments_to_db(
 
 @activity.defn
 async def get_universe_stats() -> UniverseStats:
-    """
-    Get statistics about the current trading universe.
+    """Get statistics about the current trading universe.
+
+    Queries MongoDB to provide counts of active instruments and
+    last update timestamp. Used for monitoring and UI display.
 
     Returns:
-        UniverseStats with counts and last update time.
+        UniverseStats: Contains:
+            - total_nse_eq: Count of active NSE equity instruments (~2000)
+            - mtf_eligible: Count of MTF-eligible instruments (~200-300)
+            - last_updated: ISO timestamp of most recent update
+
+    Note: Only counts instruments where is_active=True
     """
     from trade_analyzer.db import get_database
 

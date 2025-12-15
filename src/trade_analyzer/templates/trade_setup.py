@@ -1,7 +1,70 @@
-"""Trade Setup Template generator for Phase 9.
+"""
+Trade Setup Template generator for Phase 8 (Weekly Recommendations).
 
-This module generates comprehensive recommendation cards
-with all phase scores and actionable trade parameters.
+This module generates comprehensive trade recommendation cards that combine
+all pipeline phase scores into actionable trade parameters. These cards
+are the final output of the Trade Analyzer system.
+
+Purpose:
+--------
+Transform raw position data from the pipeline into human-readable
+recommendation cards with:
+- Multi-phase conviction scores
+- Technical levels (entry, stop, targets)
+- Position sizing details
+- Actionable step-by-step instructions
+- Monday gap contingency plans
+
+Conviction Score Calculation:
+----------------------------
+Final Conviction (0-10) = weighted average of phase scores:
+- Momentum Score (25%): Price strength vs Nifty
+- Consistency Score (20%): Weekly return consistency
+- Liquidity Score (15%): Volume and turnover quality
+- Fundamental Score (20%): Financial health metrics
+- Setup Confidence (20%): Technical pattern quality
+
+Labels:
+- 8-10: Very High conviction
+- 6.5-8: High conviction
+- 5-6.5: Medium conviction
+- 3.5-5: Low conviction
+- 0-3.5: Very Low conviction
+
+Usage:
+------
+    from trade_analyzer.templates.trade_setup import (
+        generate_recommendation_card,
+        generate_text_template,
+    )
+
+    # Generate a recommendation card
+    position = {...}  # Position data from pipeline
+    card = generate_recommendation_card(position, portfolio_value=1000000)
+
+    # Generate text output
+    text = generate_text_template(card)
+    print(text)
+
+Output Example:
+--------------
+    ================================================================================
+                        TRADE RECOMMENDATION CARD
+                        Week of December 16, 2024
+    ================================================================================
+
+    SYMBOL: RELIANCE
+    Company: Reliance Industries Ltd
+    Sector: Oil & Gas
+    Setup Type: PULLBACK
+
+    Final Conviction: 7.5/10 (High)
+    ...
+
+See Also:
+---------
+- trade_analyzer.activities.recommendation: Creates recommendation data
+- trade_analyzer.workflows.weekly_recommendation: Orchestrates generation
 """
 
 from dataclasses import dataclass, field
@@ -11,7 +74,40 @@ from typing import Literal
 
 @dataclass
 class TradeSetupTemplate:
-    """Production trade setup template with all scores and parameters."""
+    """
+    Production trade setup template with all scores and parameters.
+
+    This dataclass holds all the information needed for a complete
+    trade recommendation card, including scores from all pipeline phases,
+    technical levels, position sizing, and action steps.
+
+    Attributes:
+        symbol: NSE stock symbol
+        company_name: Full company name
+        sector: Industry sector
+        week_display: Week date string for display
+
+        momentum_score: Phase 2 momentum score (0-100)
+        consistency_score: Phase 3 consistency score (0-100)
+        liquidity_score: Phase 4A liquidity score (0-100)
+        fundamental_score: Phase 1 fundamental score (0-100)
+        setup_confidence: Phase 4B setup confidence (0-100)
+        final_conviction: Combined conviction (0-10)
+        conviction_label: Text label (Very High/High/Medium/Low)
+
+        current_price: Latest closing price
+        entry_low/high: Entry zone bounds
+        stop_loss: Stop loss price
+        target_1/2: Profit targets
+
+        shares: Number of shares to buy
+        investment_amount: Total investment value
+        risk_amount: Capital at risk
+        position_pct: Position as % of portfolio
+
+        action_steps: List of actionable instructions
+        gap_contingency: Monday gap handling rules
+    """
 
     # Identification
     symbol: str

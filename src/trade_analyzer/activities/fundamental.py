@@ -1,9 +1,14 @@
-"""Fundamental Intelligence activities for Phase 5.
+"""Fundamental Intelligence activities.
 
 This module implements:
 1. Multi-dimensional fundamental scoring (0-100)
 2. Institutional ownership intelligence
 3. Integration with FMP and Alpha Vantage APIs
+
+Architecture:
+- Monthly: FundamentalDataRefreshWorkflow fetches API data for universe
+- Weekly: apply_fundamental_filter() uses cached data (no API calls)
+- Phase 1 applies fundamental filter using cached fundamental_scores
 """
 
 import asyncio
@@ -363,3 +368,177 @@ async def get_fundamentally_qualified_symbols() -> list[str]:
     )
 
     return qualified_symbols
+
+
+# --- New activities for Phase 1 integration ---
+
+
+@activity.defn
+async def fetch_universe_for_fundamentals(min_quality_score: float = 60.0) -> list[str]:
+    """
+    Fetch high-quality symbols from universe for fundamental data refresh.
+
+    This is used by the MONTHLY FundamentalDataRefreshWorkflow to fetch
+    fundamental data for all quality stocks (not just trade setups).
+
+    Args:
+        min_quality_score: Minimum quality score threshold
+
+    Returns:
+        List of symbol strings from stocks collection.
+    """
+    db = get_database()
+    collection = db["stocks"]
+
+    # Get all active, high-quality stocks
+    cursor = collection.find(
+        {
+            "is_active": True,
+            "quality_score": {"$gte": min_quality_score},
+        },
+        {"symbol": 1},
+    ).sort("quality_score", -1)
+
+    symbols = [doc["symbol"] for doc in cursor]
+
+    activity.logger.info(
+        f"Found {len(symbols)} high-quality symbols for fundamental refresh"
+    )
+    return symbols
+
+
+@activity.defn
+async def apply_fundamental_filter(min_score: float = 60.0) -> dict:
+    """
+    Apply fundamental filter using CACHED data (no API calls).
+
+    Called in Phase 1 after universe setup. Updates stocks collection
+    with fundamentally_qualified flag based on cached fundamental_scores.
+
+    Args:
+        min_score: Minimum fundamental score to qualify
+
+    Returns:
+        Stats dict with filter results.
+    """
+    db = get_database()
+    stocks_collection = db["stocks"]
+    fund_collection = db["fundamental_scores"]
+    inst_collection = db["institutional_holdings"]
+
+    # Get latest fundamental scores for each symbol
+    fund_pipeline = [
+        {"$sort": {"calculated_at": -1}},
+        {"$group": {
+            "_id": "$symbol",
+            "fundamental_score": {"$first": "$fundamental_score"},
+            "qualifies": {"$first": "$qualifies"},
+            "calculated_at": {"$first": "$calculated_at"},
+        }},
+    ]
+    fund_cursor = fund_collection.aggregate(fund_pipeline)
+    fund_map = {
+        doc["_id"]: {
+            "score": doc.get("fundamental_score", 0),
+            "qualifies": doc.get("qualifies", False),
+            "calculated_at": doc.get("calculated_at"),
+        }
+        for doc in fund_cursor
+    }
+
+    # Get latest institutional holdings for each symbol
+    inst_pipeline = [
+        {"$sort": {"fetched_at": -1}},
+        {"$group": {
+            "_id": "$symbol",
+            "qualifies": {"$first": "$qualifies"},
+        }},
+    ]
+    inst_cursor = inst_collection.aggregate(inst_pipeline)
+    inst_map = {doc["_id"]: doc.get("qualifies", False) for doc in inst_cursor}
+
+    # Get all active stocks
+    active_stocks = list(stocks_collection.find({"is_active": True}, {"symbol": 1}))
+
+    # Update each stock with fundamental qualification
+    qualified_count = 0
+    no_data_count = 0
+    updated_count = 0
+
+    for stock in active_stocks:
+        symbol = stock["symbol"]
+        fund_data = fund_map.get(symbol)
+        inst_qualifies = inst_map.get(symbol, False)
+
+        if fund_data is None:
+            # No fundamental data yet - mark as not qualified but don't exclude
+            # (will be fetched in next monthly refresh)
+            fundamentally_qualified = False
+            fundamental_score = None
+            fundamental_updated_at = None
+            no_data_count += 1
+        else:
+            # Check if passes both fundamental AND institutional filters
+            fund_qualifies = fund_data["qualifies"] and fund_data["score"] >= min_score
+            fundamentally_qualified = fund_qualifies and inst_qualifies
+            fundamental_score = fund_data["score"]
+            fundamental_updated_at = fund_data["calculated_at"]
+
+            if fundamentally_qualified:
+                qualified_count += 1
+
+        # Update stock document
+        stocks_collection.update_one(
+            {"_id": stock["_id"]},
+            {
+                "$set": {
+                    "fundamentally_qualified": fundamentally_qualified,
+                    "fundamental_score": fundamental_score,
+                    "fundamental_updated_at": fundamental_updated_at,
+                }
+            },
+        )
+        updated_count += 1
+
+    activity.logger.info(
+        f"Applied fundamental filter: {qualified_count}/{updated_count} qualified, "
+        f"{no_data_count} stocks have no fundamental data yet"
+    )
+
+    return {
+        "total_stocks": updated_count,
+        "fundamentally_qualified": qualified_count,
+        "no_data": no_data_count,
+        "min_score": min_score,
+    }
+
+
+@activity.defn
+async def get_fundamentally_qualified_for_momentum() -> list[str]:
+    """
+    Get symbols that passed Phase 1 fundamental filter.
+
+    Used by Phase 2 momentum filter as input. Returns only stocks where
+    fundamentally_qualified = True in the stocks collection.
+
+    Returns:
+        List of symbol strings ready for momentum analysis.
+    """
+    db = get_database()
+    collection = db["stocks"]
+
+    # Get stocks that are active AND fundamentally qualified
+    cursor = collection.find(
+        {
+            "is_active": True,
+            "fundamentally_qualified": True,
+        },
+        {"symbol": 1, "fundamental_score": 1},
+    ).sort("fundamental_score", -1)
+
+    symbols = [doc["symbol"] for doc in cursor]
+
+    activity.logger.info(
+        f"Found {len(symbols)} fundamentally-qualified symbols for momentum analysis"
+    )
+    return symbols

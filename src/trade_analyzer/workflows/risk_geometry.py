@@ -1,12 +1,91 @@
 """Risk Geometry workflow for Phase 6.
 
-This workflow:
-1. Fetches fundamentally-enriched setups from Phase 5
-2. Calculates multi-method stop-loss (structure, volatility)
-3. Calculates position sizes with Kelly + Volatility adjustments
-4. Saves results to MongoDB
+This module implements Phase 6 of the trading pipeline (now Phase 5 after
+fundamental consolidation), which calculates precise stop-loss levels and
+position sizes for each trade setup.
 
-Reduces ~8-12 fundamental stocks to ~8-10 risk-qualified.
+Pipeline Position: Phase 6 (now Phase 5) - Risk Geometry
+--------------------------------------------------------
+Input: Trade setups from Phase 4B (~8-15 setups)
+Output: Position-sized setups ready for portfolio construction (~8-10 positions)
+
+Note: Phase numbering reflects original design. After moving fundamentals to
+Phase 1, this is effectively Phase 5, but kept as Phase 6 for consistency.
+
+This workflow calculates exact risk parameters for each setup, including:
+- Precise stop-loss levels using multiple methods
+- Position sizes adjusted for volatility and Kelly criterion
+- Risk-reward ratios for each target level
+- Total portfolio risk calculations
+
+Workflow Flow:
+1. Fetch setups from Phase 4B trade_setups collection
+2. Calculate risk geometry (stops, targets, R:R) for each setup
+3. Calculate position sizes with volatility and Kelly adjustments
+4. Save results to MongoDB risk_geometry collection
+
+Stop-Loss Calculation (2 Methods):
+1. Structure Stop: Recent swing low × 0.99 (support-based)
+2. Volatility Stop: Entry - (2.0 × ATR14) (volatility-based)
+Final Stop = max(structure, volatility) # Tighter of two
+
+Position Sizing Formula:
+Base_Size = (Portfolio × Risk%) / (Entry - Stop)
+Vol_Adjusted = Base × (Nifty_ATR / Stock_ATR)
+Kelly_Fraction = min(1.0, Kelly_Criterion)
+Final_Shares = Base × Vol_Adj × Kelly × Regime_Multiplier
+
+Kelly Criterion:
+Kelly = (Win% × AvgWin - Loss% × AvgLoss) / AvgWin
+- Capped at 1.0 (never bet more than base)
+- Uses system stats from past 52 weeks
+- Adjusts for actual performance vs backtests
+
+Regime Multipliers:
+- Risk-On (BULL): 1.0 (full position)
+- Choppy (SIDEWAYS): 0.7 (reduced)
+- Risk-Off (BEAR): 0.0 (no new positions)
+
+Hard Constraints:
+- Max 1.5% risk per trade (regime-adjusted)
+- Max 8% single position (of portfolio value)
+- Max 12 positions (Risk-On), 5 (Choppy), 0 (Risk-Off)
+- Stop distance <= 7% from entry
+
+Typical Funnel:
+~8-15 setups -> ~8-12 analyzed -> ~8-10 risk-qualified
+
+Inputs:
+- portfolio_value: Total portfolio value (default 10L INR)
+- risk_pct_per_trade: Risk per trade (default 1.5%)
+- max_position_pct: Max single position (default 8%)
+- max_positions: Max total positions (default 12)
+- min_rr_risk_on: Min R:R in Risk-On (default 2.0)
+- min_rr_choppy: Min R:R in Choppy (default 2.5)
+- max_stop_pct: Max stop distance (default 7%)
+- market_regime: Current regime (default risk_on)
+
+Outputs:
+- RiskGeometryResult containing:
+  - setups_analyzed: Total setups analyzed
+  - risk_qualified: Setups passing risk filters
+  - total_risk: Total portfolio risk (INR)
+  - total_value: Total capital allocated (INR)
+  - avg_rr_ratio: Average R:R across positions
+  - top_positions: Top positions by composite score
+
+Retry Policy:
+- Initial interval: 2 seconds
+- Maximum interval: 60 seconds
+- Maximum attempts: 3
+- Backoff coefficient: 2.0
+
+Typical Runtime: 3-5 minutes
+
+Related Workflows:
+- SetupDetectionWorkflow (Phase 4B): Provides input
+- PortfolioConstructionWorkflow (Phase 7): Uses output
+- Phase6PipelineWorkflow: Orchestrates Phase 5+6
 """
 
 from dataclasses import dataclass
@@ -26,7 +105,18 @@ with workflow.unsafe.imports_passed_through():
 
 @dataclass
 class RiskGeometryResult:
-    """Result of risk geometry workflow."""
+    """Result of risk geometry workflow.
+
+    Attributes:
+        success: True if workflow completed without errors
+        setups_analyzed: Total setups analyzed for risk geometry
+        risk_qualified: Positions passing risk filters (stop <=7%, R:R >=2.0)
+        total_risk: Total portfolio risk amount in INR
+        total_value: Total capital allocated across positions in INR
+        avg_rr_ratio: Average reward:risk ratio to first target
+        top_positions: Top positions by composite score (max 10)
+        error: Error message if workflow failed, None otherwise
+    """
 
     success: bool
     setups_analyzed: int
@@ -40,19 +130,43 @@ class RiskGeometryResult:
 
 @workflow.defn
 class RiskGeometryWorkflow:
-    """
-    Workflow for Phase 6: Risk Geometry.
+    """Workflow for Phase 6 (now Phase 5): Risk Geometry.
 
-    Stop-Loss Methods:
-    1. Structure Stop: Below swing low * 0.99
-    2. Volatility Stop: Entry - 2.0 × ATR(14)
-    Final Stop = max(structure, volatility) (tighter)
+    This workflow orchestrates precise risk calculations for each trade setup,
+    applying multi-method stop-loss placement and volatility-adjusted position
+    sizing with Kelly criterion optimization.
 
-    Position Sizing:
-    Base = (Portfolio × Risk%) / Risk_per_share
+    Activities Orchestrated:
+    1. fetch_fundamentally_enriched_setups: Gets setups from Phase 4B
+    2. calculate_risk_geometry_batch: Calculates stops, targets, R:R
+    3. calculate_position_sizes: Calculates shares with Kelly + volatility adjustments
+    4. save_risk_geometry_results: Saves to MongoDB risk_geometry collection
+
+    Stop-Loss Methods (2 Methods):
+    1. Structure Stop: Recent swing low × 0.99 (support-based)
+    2. Volatility Stop: Entry - (2.0 × ATR14) (volatility-based)
+    Final Stop = max(structure, volatility) # Tighter of two
+
+    Position Sizing Formula:
+    Base_Size = (Portfolio × Risk%) / (Entry - Stop)
     Vol_Adjusted = Base × (Nifty_ATR / Stock_ATR)
-    Kelly = (Win% × AvgWin - Loss% × AvgLoss) / AvgWin
-    Final = Base × Vol_Adj × min(1.0, Kelly) × Regime_Mult
+    Kelly_Fraction = min(1.0, Kelly_Criterion)
+    Final_Shares = Base × Vol_Adj × Kelly × Regime_Multiplier
+
+    Risk Constraints:
+    - Max 1.5% risk per trade
+    - Max 8% single position
+    - Max 12 total positions
+    - Stop distance <= 7%
+    - Min R:R >= 2.0 (Risk-On) or 2.5 (Choppy)
+
+    Error Handling:
+    - Returns empty result if no setups found
+    - Continues processing even if some setups fail
+    - Partial results with error flag
+
+    Returns:
+        RiskGeometryResult with position-sized setups
     """
 
     @workflow.run

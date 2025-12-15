@@ -1,4 +1,75 @@
-"""Script to start Temporal workflows."""
+"""
+Script to start Temporal workflows.
+
+This module provides convenience functions to start all workflows in the
+trade analysis pipeline. Each function connects to Temporal, starts a workflow,
+and waits for the result.
+
+Purpose:
+    - Programmatic workflow execution (from UI, CLI, or scheduled jobs)
+    - Each function handles one workflow or pipeline combination
+    - All functions return structured result dictionaries
+
+Workflow Categories:
+    1. Universe & Setup (Phase 1):
+       - start_universe_setup() - Full universe setup with quality scoring
+       - start_universe_setup_async() - Non-blocking version
+       - start_universe_refresh() - Basic refresh (deprecated)
+
+    2. Momentum Filter (Phase 2):
+       - start_momentum_filter() - Run momentum analysis alone
+       - start_universe_and_momentum() - Combined Phase 1+2 (weekend run)
+
+    3. Consistency Filter (Phase 3):
+       - start_consistency_filter() - Run consistency analysis alone
+       - start_full_pipeline() - Combined Phase 1+2+3
+
+    4. Volume & Setup Detection (Phase 4):
+       - start_volume_filter() - Run volume/liquidity analysis
+       - start_setup_detection() - Detect technical setups
+       - start_phase4_pipeline() - Combined Phase 4A+4B
+       - start_full_analysis_pipeline() - Full Phase 1-4
+
+    5. Fundamental Data (Monthly Refresh):
+       - start_fundamental_data_refresh() - Monthly API data refresh
+       - start_fundamental_filter() - Legacy alias
+
+    6. Risk Geometry (Phase 5):
+       - start_risk_geometry() - Calculate position sizes and risk metrics
+
+    7. Portfolio Construction (Phase 6):
+       - start_portfolio_construction() - Build final portfolio
+       - start_phase7_pipeline() - Combined Phase 5-6
+
+    8. Execution Display (Phase 7):
+       - start_premarket_analysis() - Monday gap analysis
+       - start_position_status() - Intraday position updates
+       - start_friday_close() - Weekly performance summary
+
+    9. Weekly Recommendations (Phase 8):
+       - start_weekly_recommendation() - Generate trade recommendations
+       - start_complete_weekly_pipeline() - Full Phase 4B-8 (master weekend workflow)
+
+Usage:
+    From Python:
+        >>> import asyncio
+        >>> from trade_analyzer.workers.start_workflow import start_universe_setup
+        >>> result = asyncio.run(start_universe_setup())
+        >>> print(result['success'])
+
+    From CLI:
+        $ python -m trade_analyzer.workers.start_workflow
+
+    From Streamlit UI:
+        Uses asyncio.run() to execute workflows synchronously
+
+Architecture:
+    - Each function creates a unique workflow ID
+    - Executes workflow synchronously (waits for completion)
+    - Returns structured dict with results
+    - Logs progress and errors
+    - All workflows use same task queue for simplicity
+"""
 
 import asyncio
 import logging
@@ -22,10 +93,10 @@ from trade_analyzer.workflows.setup_detection import (
     Phase4PipelineWorkflow,
     FullAnalysisPipelineWorkflow,
 )
-# Phase 5-9 workflows
+# Fundamental Data Refresh (monthly) + backward compat alias
 from trade_analyzer.workflows.fundamental_filter import (
-    FundamentalFilterWorkflow,
-    Phase5PipelineWorkflow,
+    FundamentalDataRefreshWorkflow,
+    FundamentalFilterWorkflow,  # Backward compat alias
 )
 from trade_analyzer.workflows.risk_geometry import (
     RiskGeometryWorkflow,
@@ -392,13 +463,63 @@ async def start_full_analysis_pipeline() -> dict:
 
 
 # ============================================================================
-# Phase 5: Fundamental Intelligence
+# Monthly Fundamental Data Refresh
 # ============================================================================
+
+
+async def start_fundamental_data_refresh(
+    min_quality_score: float = 60.0,
+    fetch_delay: float = 1.0,
+) -> dict:
+    """
+    Start the MONTHLY fundamental data refresh workflow.
+
+    This workflow fetches fundamental data from FMP/Alpha Vantage APIs
+    and caches it in MongoDB. Run this once a month (after quarterly results).
+
+    The weekly UniverseSetupWorkflow (Phase 1) will use this cached data
+    to apply fundamental filters without making API calls.
+
+    Args:
+        min_quality_score: Minimum quality score for stocks to analyze
+        fetch_delay: Delay between API calls (respecting rate limits)
+
+    Returns:
+        Result dict with workflow outcome.
+    """
+    client = await get_temporal_client()
+
+    workflow_id = f"fundamental-refresh-{uuid.uuid4().hex[:8]}"
+
+    result = await client.execute_workflow(
+        FundamentalDataRefreshWorkflow.run,
+        args=[min_quality_score, fetch_delay],
+        id=workflow_id,
+        task_queue=TASK_QUEUE_UNIVERSE_REFRESH,
+    )
+
+    logger.info(f"Workflow {workflow_id} completed with result: {result}")
+    return {
+        "workflow_id": workflow_id,
+        "success": result.success,
+        "symbols_analyzed": result.symbols_analyzed,
+        "fundamental_saved": result.fundamental_saved,
+        "fundamental_qualified": result.fundamental_qualified,
+        "holdings_saved": result.holdings_saved,
+        "holdings_qualified": result.holdings_qualified,
+        "combined_qualified": result.combined_qualified,
+        "avg_fundamental_score": result.avg_fundamental_score,
+        "top_10": result.top_10,
+        "error": result.error,
+    }
 
 
 async def start_fundamental_filter() -> dict:
     """
-    Start the fundamental filter workflow.
+    Start the fundamental filter workflow (legacy - use start_fundamental_data_refresh).
+
+    This is kept for backward compatibility. New code should use
+    start_fundamental_data_refresh() for the monthly refresh.
 
     Returns:
         Result dict with workflow outcome.
@@ -409,7 +530,7 @@ async def start_fundamental_filter() -> dict:
 
     result = await client.execute_workflow(
         FundamentalFilterWorkflow.run,
-        args=[1.0],  # fetch_delay
+        args=[60.0, 1.0],  # min_quality_score, fetch_delay
         id=workflow_id,
         task_queue=TASK_QUEUE_UNIVERSE_REFRESH,
     )
@@ -420,7 +541,7 @@ async def start_fundamental_filter() -> dict:
         "success": result.success,
         "symbols_analyzed": result.symbols_analyzed,
         "fundamental_qualified": result.fundamental_qualified,
-        "institutional_qualified": result.institutional_qualified,
+        "holdings_qualified": result.holdings_qualified,
         "combined_qualified": result.combined_qualified,
         "avg_fundamental_score": result.avg_fundamental_score,
         "top_10": result.top_10,
@@ -429,7 +550,7 @@ async def start_fundamental_filter() -> dict:
 
 
 # ============================================================================
-# Phase 6: Risk Geometry
+# Phase 5: Risk Geometry (was Phase 6)
 # ============================================================================
 
 
@@ -473,7 +594,7 @@ async def start_risk_geometry(
 
 
 # ============================================================================
-# Phase 7: Portfolio Construction
+# Phase 6: Portfolio Construction (was Phase 7)
 # ============================================================================
 
 
@@ -559,7 +680,7 @@ async def start_phase7_pipeline(
 
 
 # ============================================================================
-# Phase 8: Execution Display
+# Phase 7: Execution Display (was Phase 8)
 # ============================================================================
 
 
@@ -668,7 +789,7 @@ async def start_friday_close() -> dict:
 
 
 # ============================================================================
-# Phase 9: Weekly Recommendations
+# Phase 8: Weekly Recommendations (was Phase 9)
 # ============================================================================
 
 
@@ -763,7 +884,15 @@ async def start_complete_weekly_pipeline(
 
 
 def main() -> None:
-    """Entry point to start universe setup workflow."""
+    """
+    Entry point to start universe setup workflow.
+
+    This is the default workflow that runs when executing this module directly.
+    It runs the full universe setup workflow with quality scoring.
+
+    Usage:
+        $ python -m trade_analyzer.workers.start_workflow
+    """
     asyncio.run(start_universe_setup())
 
 

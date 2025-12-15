@@ -1,9 +1,72 @@
 """Risk Geometry activities for Phase 6.
 
-This module implements:
-1. Multi-method stop-loss calculation (structure, volatility, time)
-2. Advanced position sizing (Kelly + Volatility adjusted)
-3. Dynamic R:R optimization
+This module implements the risk management and position sizing phase that converts
+technical setups into fully-parameterized trades with precise risk/reward geometry.
+
+Pipeline Position: Phase 6 (after Setup Detection & Fundamental Enrichment)
+Input: 8-15 technical setups from Phase 4B (enriched with Phase 5 fundamentals)
+Output: 5-12 position-sized trades ready for portfolio construction
+
+The risk geometry calculation is CRITICAL for system survival. It ensures:
+- Stops are mathematically optimal (not arbitrary)
+- Position sizes account for volatility and historical performance
+- Risk per trade is adaptive to market regime
+- Expected value is positive after transaction costs
+
+Three-Method Stop-Loss Calculation:
+
+Method 1: Structure Stop
+    - Based on swing lows (10-day lookback)
+    - Logic: Market structure support
+    - Formula: swing_low * 0.99 (1% buffer)
+
+Method 2: Volatility Stop
+    - Based on ATR(14) - Average True Range
+    - Logic: Price volatility protection
+    - Formula: entry - (2.0 * ATR_14)
+
+Method 3: Time Stop (implemented separately)
+    - Flags position if no 2% move in 5 days
+    - Logic: Dead money protection
+
+Final Stop Selection:
+    - Use MAX(structure, volatility) = tighter stop
+    - Higher stop = less risk per share
+    - Validates: stop distance ≤ 7% from entry
+
+Position Sizing Formula (Kelly + Volatility Adjusted):
+
+Base Position:
+    base_shares = (portfolio * risk_pct) / risk_per_share
+    where risk_pct = 1.5% in Risk-On, 0.75% in Choppy
+
+Volatility Adjustment:
+    vol_adjustment = nifty_atr / stock_atr
+    bounded to [0.5, 1.5]
+    Logic: Reduce size for volatile stocks, increase for stable
+
+Kelly Criterion:
+    kelly = (win_rate * avg_win - (1-win_rate) * avg_loss) / avg_win
+    bounded to [0.25, 1.0]
+    Logic: Bet sizing based on historical edge
+
+Regime Multiplier:
+    risk_on: 1.0 (full size)
+    choppy: 0.5 (half size)
+    risk_off: 0.0 (no trades)
+
+Final Calculation:
+    final_shares = base_shares × vol_adj × kelly × regime_mult
+    capped at: (portfolio × 8%) / entry_price
+
+Validation:
+    - R:R ratio ≥ 2.0 (Risk-On) or ≥ 2.5 (Choppy)
+    - Stop distance ≤ 7%
+    - Position ≤ 8% of portfolio
+    - Total portfolio positions ≤ 12
+
+Expected Output: 5-12 fully position-sized setups
+Pass Rate: ~80% of input setups (some fail validation)
 """
 
 import asyncio

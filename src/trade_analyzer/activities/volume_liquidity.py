@@ -1,10 +1,53 @@
 """Volume & Liquidity filter activities for Phase 4A.
 
-This module implements:
-1. Multi-dimensional liquidity scoring (0-100)
-2. Smart volume expansion detection
-3. Circuit & halt intelligence
-4. Impact cost estimation
+This module implements the volume and liquidity screening that ensures stocks can be
+traded with minimal slippage and market impact.
+
+Pipeline Position: Phase 4A (after Consistency Filter)
+Input: ~30-50 consistency-qualified stocks from Phase 3
+Output: ~20-30 highly liquid stocks
+
+Why Liquidity Matters:
+- Prevents slippage eating into profits
+- Enables quick entry/exit
+- Reduces circuit hit risk
+- Ensures institutional participation
+
+The liquidity scoring system evaluates four dimensions:
+
+1. Turnover (20D Average in Crores)
+    - Minimum: ≥10 Cr daily
+    - Ideal: ≥25 Cr daily
+    - Logic: Can trade Rs.5-10L position without impact
+
+2. Volume Expansion
+    - Recent volume vs 50D average
+    - Smart money accumulation signal
+    - Threshold: >1.2x increase
+
+3. Circuit Hit Intelligence
+    - Counts circuit hits in last 30 days
+    - Maximum allowed: 1 hit
+    - Logic: Avoid manipulated/illiquid stocks
+
+4. Gap Analysis
+    - Average gap % (open vs prev close)
+    - Maximum: ≤2%
+    - Logic: Predictable execution environment
+
+Liquidity Score Formula (0-100):
+    40% × Turnover_Score +
+    30% × Volume_Expansion_Score +
+    20% × Circuit_Safety_Score +
+    10% × Gap_Consistency_Score
+
+Filter Criteria (3/4 must pass):
+    ✓ Liquidity score ≥ 75
+    ✓ Turnover 20D ≥ 10 Cr
+    ✓ Circuit hits 30D ≤ 1
+    ✓ Avg gap % ≤ 2%
+
+Expected Pass Rate: ~65% (20-30 stocks from 30-50 input)
 """
 
 import asyncio

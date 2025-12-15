@@ -1,14 +1,86 @@
 """Portfolio Construction workflow for Phase 7.
 
-This workflow:
-1. Fetches position-sized setups from Phase 6
-2. Calculates correlation matrix
-3. Applies correlation filter (max 0.70)
-4. Applies sector limits (3 per sector, 25% max)
-5. Constructs final portfolio with constraints
-6. Saves portfolio allocation
+This module implements Phase 7 of the trading pipeline (now Phase 6 after
+fundamental consolidation), which constructs the final portfolio by applying
+correlation and sector diversification constraints.
 
-Produces final 3-7 position portfolio.
+Pipeline Position: Phase 7 (now Phase 6) - Portfolio Construction
+-----------------------------------------------------------------
+Input: Position-sized setups from Phase 6 (~8-10 positions)
+Output: Final portfolio allocation (3-7 positions)
+
+This is the FINAL filter that produces the actual trading portfolio by ensuring
+proper diversification and risk distribution across sectors and correlations.
+
+Workflow Flow:
+1. Fetch position-sized setups from Phase 6 risk_geometry collection
+2. Calculate 60-day correlation matrix for all symbols
+3. Apply correlation filter (remove highly correlated pairs)
+4. Apply sector limits (max 3 per sector, 25% max exposure)
+5. Construct final portfolio with position limits and cash reserve
+6. Save to MongoDB portfolio_allocations collection
+
+5 Portfolio Constraints:
+1. Correlation Filter: Max 0.70 between any two positions
+2. Sector Limits: Max 3 positions per sector
+3. Sector Exposure: Max 25% of portfolio in single sector
+4. Position Limits: Max 12 (Risk-On), 5 (Choppy), 0 (Risk-Off)
+5. Cash Reserve: Maintain 25-35% cash buffer
+
+Correlation Filter Logic:
+- Calculate 60-day rolling correlation for all pairs
+- If correlation > 0.70, remove lower-scored position
+- Ensures portfolio isn't overexposed to single market factor
+
+Sector Diversification:
+- Max 3 positions per sector (prevents sector concentration)
+- Max 25% exposure per sector (by capital allocation)
+- Prioritizes high-quality setups across diverse sectors
+
+Cash Reserve Management:
+- Target: 30% cash reserve
+- Min: 25% (aggressive deployment)
+- Max: 35% (conservative, few opportunities)
+- Never fully deploy capital (risk management buffer)
+
+Typical Funnel:
+~8-10 risk-qualified -> ~6-8 after correlation -> ~5-7 after sector -> 3-7 final
+
+Inputs:
+- portfolio_value: Total portfolio value (default 10L INR)
+- max_correlation: Max allowed correlation (default 0.70)
+- max_per_sector: Max positions per sector (default 3)
+- max_sector_pct: Max sector exposure (default 0.25)
+- max_positions: Max total positions (default 12)
+- min_positions: Min for valid portfolio (default 3)
+- cash_reserve_pct: Target cash reserve (default 0.30)
+- market_regime: Current regime (default risk_on)
+
+Outputs:
+- PortfolioConstructionResult containing:
+  - setups_input: Input positions from Phase 6
+  - after_correlation_filter: Positions after correlation filter
+  - after_sector_limits: Positions after sector limits
+  - final_positions: Final portfolio positions (3-7)
+  - total_invested_pct: Capital deployed (%)
+  - total_risk_pct: Portfolio risk (%)
+  - cash_reserve_pct: Cash reserve (%)
+  - sector_allocation: Breakdown by sector
+  - positions: Full position details
+  - status: Portfolio status (valid/no_setups/insufficient)
+
+Retry Policy:
+- Initial interval: 2 seconds
+- Maximum interval: 60 seconds
+- Maximum attempts: 3
+- Backoff coefficient: 2.0
+
+Typical Runtime: 5-8 minutes
+
+Related Workflows:
+- RiskGeometryWorkflow (Phase 6): Provides input
+- WeeklyRecommendationWorkflow (Phase 8): Uses output
+- Phase7PipelineWorkflow: Orchestrates Phase 5+6+7
 """
 
 from dataclasses import dataclass
@@ -36,7 +108,22 @@ with workflow.unsafe.imports_passed_through():
 
 @dataclass
 class PortfolioConstructionResult:
-    """Result of portfolio construction workflow."""
+    """Result of portfolio construction workflow.
+
+    Attributes:
+        success: True if workflow completed without errors
+        setups_input: Input positions from Phase 6
+        after_correlation_filter: Positions after correlation filter
+        after_sector_limits: Positions after sector limits
+        final_positions: Final portfolio positions (3-7 target)
+        total_invested_pct: Percentage of capital deployed
+        total_risk_pct: Total portfolio risk as % of capital
+        cash_reserve_pct: Cash reserve percentage (target 25-35%)
+        sector_allocation: Breakdown by sector {sector: {count, pct}}
+        positions: Full position details with entry/stop/target/size
+        status: Portfolio status (valid/no_setups/insufficient/error)
+        error: Error message if workflow failed, None otherwise
+    """
 
     success: bool
     setups_input: int
@@ -54,15 +141,41 @@ class PortfolioConstructionResult:
 
 @workflow.defn
 class PortfolioConstructionWorkflow:
-    """
-    Workflow for Phase 7: Portfolio Construction.
+    """Workflow for Phase 7 (now Phase 6): Portfolio Construction.
 
-    Constraints Applied:
-    1. Correlation filter: Max 0.70 between any two positions
-    2. Sector limits: Max 3 per sector, 25% max exposure
-    3. Position limits: Max 12 (Risk-On), 5 (Choppy), 0 (Risk-Off)
-    4. Single position: Max 8% of portfolio
-    5. Cash reserve: 25-35%
+    This workflow orchestrates final portfolio construction by applying
+    correlation and sector diversification filters to create a balanced,
+    risk-managed portfolio.
+
+    Activities Orchestrated:
+    1. fetch_position_sized_setups: Gets positions from Phase 6
+    2. calculate_correlation_matrix: Calculates 60-day correlations
+    3. apply_correlation_filter: Removes highly correlated pairs
+    4. apply_sector_limits: Enforces sector concentration limits
+    5. construct_final_portfolio: Builds final portfolio with constraints
+    6. save_portfolio_allocation: Saves to MongoDB portfolio_allocations
+
+    5 Portfolio Constraints Applied:
+    1. Correlation: Max 0.70 between any two positions
+    2. Sector Count: Max 3 positions per sector
+    3. Sector Exposure: Max 25% of portfolio in single sector
+    4. Position Limits: Max 12 (Risk-On), 5 (Choppy), 0 (Risk-Off)
+    5. Cash Reserve: Maintain 25-35% buffer
+
+    Diversification Logic:
+    - Prioritizes uncorrelated positions (correlation < 0.70)
+    - Distributes across sectors (no concentration)
+    - Balances position sizes (no single oversized position)
+    - Maintains cash buffer (risk management)
+
+    Error Handling:
+    - Returns no_setups status if no input positions
+    - Returns insufficient status if < min_positions
+    - Continues processing even if some calculations fail
+    - Partial results with error flag
+
+    Returns:
+        PortfolioConstructionResult with final portfolio allocation
     """
 
     @workflow.run

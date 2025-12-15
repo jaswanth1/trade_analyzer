@@ -1,11 +1,60 @@
 """Momentum filter workflow for Phase 2 - Enhanced Momentum & Trend Filters.
 
-This workflow:
-1. Fetches high-quality stocks from universe (score >= 60)
-2. Fetches Nifty 50 benchmark data
-3. Fetches historical OHLCV for all stocks (batched)
-4. Calculates momentum scores and applies 5 filters
-5. Saves results to MongoDB
+This module implements Phase 2 of the trading pipeline, which applies momentum
+and trend filters to reduce the high-quality universe to momentum leaders.
+
+Pipeline Position: Phase 2 - Momentum Filter
+--------------------------------------------
+Input: High-quality stocks (score >= 60) from Phase 1 (~450 stocks)
+Output: Momentum-qualified stocks (~50-100 stocks)
+
+This is the SECOND filter in the weekend pipeline, focusing on stocks
+showing strong upward momentum and trend alignment.
+
+Workflow Flow:
+1. Fetch high-quality symbols from Phase 1 (quality_score >= 60)
+2. Fetch Nifty 50 benchmark data for relative strength calculations
+3. Fetch historical OHLCV data (batched with rate limiting)
+4. Calculate momentum scores using 5 filters:
+   - Filter 2A: 52-Week High Proximity (within 10%)
+   - Filter 2B: Advanced MA System (5-layer: 10/20/50/100/200)
+   - Filter 2C: Multi-Timeframe Relative Strength vs Nifty
+   - Filter 2D: Composite Momentum Score
+   - Filter 2E: Volatility-Adjusted Momentum
+5. Save results to MongoDB momentum_scores collection
+
+5-Filter System:
+- Each filter is binary (pass/fail)
+- Must pass ALL 5 filters to qualify
+- Filters are designed to identify clean uptrends
+- Stocks are ranked by momentum_score (0-100)
+
+Typical Funnel:
+~450 high-quality -> ~300 analyzed -> ~50-100 momentum-qualified
+
+Inputs:
+- batch_size: Number of stocks to fetch per API batch (default 100)
+
+Outputs:
+- MomentumFilterResult containing:
+  - total_analyzed: Stocks analyzed
+  - total_qualified: Stocks passing all 5 filters
+  - avg_momentum_score: Average momentum score
+  - top_10: Top 10 stocks by momentum score
+  - nifty_return_3m: Nifty 50 3-month return for reference
+
+Retry Policy:
+- Initial interval: 2 seconds
+- Maximum interval: 60 seconds
+- Maximum attempts: 3
+- Backoff coefficient: 2.0
+
+Typical Runtime: 15-25 minutes (depends on batch size and API rate limits)
+
+Related Workflows:
+- UniverseSetupWorkflow (Phase 1): Provides input
+- ConsistencyFilterWorkflow (Phase 3): Uses output
+- UniverseAndMomentumWorkflow: Combined Phase 1+2 workflow
 """
 
 from dataclasses import dataclass
@@ -25,7 +74,17 @@ with workflow.unsafe.imports_passed_through():
 
 @dataclass
 class MomentumFilterResult:
-    """Result of momentum filter workflow."""
+    """Result of momentum filter workflow.
+
+    Attributes:
+        success: True if workflow completed without errors
+        total_analyzed: Total stocks analyzed with market data
+        total_qualified: Stocks passing all 5 momentum filters
+        avg_momentum_score: Average momentum score across all analyzed stocks
+        top_10: Top 10 stocks by momentum_score with key metrics
+        nifty_return_3m: Nifty 50 3-month return for benchmark comparison
+        error: Error message if workflow failed, None otherwise
+    """
 
     success: bool
     total_analyzed: int
@@ -38,17 +97,36 @@ class MomentumFilterResult:
 
 @workflow.defn
 class MomentumFilterWorkflow:
-    """
-    Workflow to apply enhanced momentum filters to the trading universe.
+    """Workflow to apply enhanced momentum filters (Phase 2).
 
-    Phase 2 Implementation:
-    - Filter 2A: 52-Week High Proximity
-    - Filter 2B: Advanced MA System (5-layer)
-    - Filter 2C: Multi-Timeframe Relative Strength
-    - Filter 2D: Composite Momentum Score
-    - Filter 2E: Volatility-Adjusted Momentum
+    This workflow orchestrates momentum analysis by fetching market data
+    in batches and applying 5 strict momentum filters to identify stocks
+    in strong uptrends with institutional-grade momentum.
 
-    Reduces ~300-500 stocks to 50-100 high-momentum candidates.
+    Activities Orchestrated:
+    1. fetch_high_quality_symbols: Gets stocks from Phase 1
+    2. fetch_nifty_benchmark_data: Gets Nifty 50 data for RS calculations
+    3. fetch_market_data_batch: Fetches OHLCV in batches with rate limiting
+    4. calculate_momentum_scores: Applies 5 filters and scores stocks
+    5. save_momentum_results: Saves to MongoDB momentum_scores collection
+
+    5-Filter System:
+    - Filter 2A: 52-Week High Proximity (close within 10% of 52W high)
+    - Filter 2B: Advanced MA System (5/10/20/50/200 alignment + rising slopes)
+    - Filter 2C: Multi-Timeframe RS (outperformance vs Nifty on 1M/3M/6M)
+    - Filter 2D: Composite Momentum Score (>=70 combined score)
+    - Filter 2E: Volatility-Adjusted Momentum (high return, low volatility)
+
+    All 5 filters must pass for qualification. Stocks are then ranked by
+    momentum_score (0-100) for priority in next phases.
+
+    Error Handling:
+    - Batched fetching with retries for API resilience
+    - Continues processing even if some stocks fail
+    - Returns partial results with error flag
+
+    Returns:
+        MomentumFilterResult with qualified stocks and statistics
     """
 
     @workflow.run
@@ -197,7 +275,23 @@ class MomentumFilterWorkflow:
 
 @dataclass
 class CombinedUniverseFilterResult:
-    """Result of combined universe + momentum filter workflow."""
+    """Result of combined universe + momentum filter workflow.
+
+    This result combines Phase 1 and Phase 2 statistics for the
+    UniverseAndMomentumWorkflow, which runs both phases sequentially.
+
+    Attributes:
+        success: True if both phases completed without errors
+        total_nse_eq: Total NSE EQ instruments from Phase 1
+        total_mtf: Total MTF instruments from Phase 1
+        high_quality_count: High-quality stocks from Phase 1 (score >= 60)
+        momentum_analyzed: Stocks analyzed in Phase 2
+        momentum_qualified: Stocks passing all 5 momentum filters
+        avg_momentum_score: Average momentum score from Phase 2
+        top_10: Top 10 stocks by momentum score
+        nifty_return_3m: Nifty 50 3-month return
+        error: Error message if either phase failed, None otherwise
+    """
 
     success: bool
     # Universe stats
@@ -215,14 +309,29 @@ class CombinedUniverseFilterResult:
 
 @workflow.defn
 class UniverseAndMomentumWorkflow:
-    """
-    Combined workflow that runs Universe Setup followed by Momentum Filter.
+    """Combined workflow that runs Universe Setup + Momentum Filter (Phase 1-2).
 
-    This is the main weekend workflow for Phase 2:
-    1. Refreshes universe (NSE EQ + MTF + Nifty indices)
-    2. Enriches with quality scores
-    3. Applies momentum filters to high-quality stocks
-    4. Produces 50-100 high-momentum candidates
+    This workflow orchestrates the first two phases of the weekend pipeline
+    as child workflows, producing momentum-qualified stocks ready for
+    consistency filtering.
+
+    Child Workflows:
+    1. UniverseSetupWorkflow (Phase 1): Creates high-quality universe
+    2. MomentumFilterWorkflow (Phase 2): Applies momentum filters
+
+    The workflow runs Phase 1 first and only proceeds to Phase 2 if Phase 1
+    succeeds. This ensures data dependencies are satisfied.
+
+    Typical Funnel:
+    ~2,400 NSE EQ -> ~450 high-quality -> ~50-100 momentum-qualified
+
+    Error Handling:
+    - If Phase 1 fails, Phase 2 is not executed
+    - Returns combined result with error from failed phase
+    - Successful phases still return their statistics
+
+    Returns:
+        CombinedUniverseFilterResult with statistics from both phases
     """
 
     @workflow.run

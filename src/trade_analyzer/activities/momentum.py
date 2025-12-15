@@ -1,11 +1,30 @@
 """Momentum filter activities for Phase 2 - Enhanced Momentum & Trend Filters.
 
-Implements 5 filters:
-- Filter 2A: 52-Week High Proximity (quantitative)
-- Filter 2B: Advanced Moving Average System (5-layer confirmation)
-- Filter 2C: Multi-Timeframe Relative Strength (vs Nifty 50 + Sector)
-- Filter 2D: Momentum Score (Composite 0-100)
-- Filter 2E: Volatility-Adjusted Momentum (Risk Control)
+This module implements the momentum screening phase that narrows down fundamentally-
+qualified stocks to those showing strong price momentum and trend characteristics.
+
+Pipeline Position: Phase 2 (after Fundamental Filter)
+Input: ~120-320 fundamentally-qualified stocks from Phase 1
+Output: ~50-100 momentum-qualified stocks
+
+The 5-filter system ensures stocks have:
+1. Price near 52-week highs (strength)
+2. Perfect moving average alignment (trend)
+3. Outperformance vs Nifty 50 (relative strength)
+4. High composite momentum score (combined signal)
+5. Controlled volatility (risk management)
+
+Stocks must pass 4+ filters to qualify. This aggressive filtering ensures only
+stocks in strong uptrends with institutional support make it to Phase 3.
+
+Filters:
+    - Filter 2A: 52-Week High Proximity - Within 10-20% of highs with volume
+    - Filter 2B: MA Alignment - 5-layer confirmation (close, slopes, ordering)
+    - Filter 2C: Relative Strength - Multi-timeframe outperformance vs Nifty
+    - Filter 2D: Momentum Score - Composite 0-100 score (≥75 to pass)
+    - Filter 2E: Volatility-Adjusted - Risk-controlled momentum (vol ≤1.5x Nifty)
+
+Expected Pass Rate: 40-80% depending on market conditions
 """
 
 import time
@@ -271,26 +290,40 @@ def _calculate_filter_2e(
 @activity.defn
 async def fetch_high_quality_symbols(min_score: int = 60) -> list[str]:
     """
-    Fetch high-quality stock symbols from the database.
+    Fetch high-quality, fundamentally-qualified stock symbols from the database.
+
+    This function returns symbols that pass BOTH quality (Phase 1) AND
+    fundamental filters (Phase 1). Stocks without fundamental data yet
+    are excluded until the monthly FundamentalDataRefreshWorkflow runs.
 
     Args:
         min_score: Minimum quality score (default 60)
 
     Returns:
-        List of stock symbols with quality_score >= min_score
+        List of stock symbols with quality_score >= min_score AND
+        fundamentally_qualified = True
     """
     from trade_analyzer.db import get_database
 
-    activity.logger.info(f"Fetching symbols with quality_score >= {min_score}...")
+    activity.logger.info(
+        f"Fetching symbols with quality_score >= {min_score} "
+        f"AND fundamentally_qualified..."
+    )
 
     db = get_database()
     stocks = db.stocks.find(
-        {"is_active": True, "quality_score": {"$gte": min_score}},
+        {
+            "is_active": True,
+            "quality_score": {"$gte": min_score},
+            "fundamentally_qualified": True,
+        },
         {"symbol": 1, "_id": 0},
     ).sort("quality_score", -1)
 
     symbols = [s["symbol"] for s in stocks]
-    activity.logger.info(f"Found {len(symbols)} high-quality symbols")
+    activity.logger.info(
+        f"Found {len(symbols)} high-quality, fundamentally-qualified symbols"
+    )
 
     return symbols
 

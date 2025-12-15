@@ -1,4 +1,30 @@
-"""Universe setup activities for high-quality trading universe."""
+"""Universe setup activities for high-quality trading universe.
+
+This module implements the full UniverseSetupWorkflow that enriches the base
+universe with quality scores and liquidity tiers. This is the primary universe
+initialization that should run periodically (daily or weekly).
+
+Pipeline Position: Phase 1 (Universe Setup & Quality Scoring)
+Input: Raw NSE EQ + MTF data from Upstox
+Output: Quality-scored universe ready for filter pipeline
+
+The quality scoring system uses a tier-based approach:
+    Tier A (90-100): MTF + Nifty 50/100 - Highest quality, best liquidity
+    Tier B (70-90): MTF + Nifty 200/500 OR MTF only - Good quality
+    Tier C (40-70): Nifty 500 (non-MTF) - Acceptable quality
+    Tier D (<40): Others - Excluded from pipeline
+
+MTF (Margin Trading Facility) eligibility is the PRIMARY quality signal,
+indicating exchange-approved liquidity and volatility standards.
+
+Activities:
+    - fetch_base_universe: Get NSE EQ + MTF from Upstox
+    - fetch_nifty_indices: Get Nifty 50/100/200/500 constituents
+    - enrich_and_score_universe: Calculate quality scores and tiers
+    - save_enriched_universe: Save to MongoDB with indexes
+
+Expected Output: ~200-400 Tier A/B stocks for further filtering
+"""
 
 import gzip
 import json
@@ -77,7 +103,18 @@ class UniverseSetupResult:
 
 
 def _fetch_gzip_json(url: str) -> list[dict]:
-    """Fetch and decompress gzipped JSON."""
+    """Fetch and decompress gzipped JSON from URL.
+
+    Args:
+        url: URL to fetch gzipped JSON from
+
+    Returns:
+        List of dicts from decompressed JSON
+
+    Raises:
+        requests.HTTPError: If request fails
+        json.JSONDecodeError: If JSON invalid
+    """
     response = requests.get(url, timeout=60)
     response.raise_for_status()
     with gzip.GzipFile(fileobj=BytesIO(response.content)) as f:
@@ -86,7 +123,14 @@ def _fetch_gzip_json(url: str) -> list[dict]:
 
 
 def _filter_nse_equity(instruments: list[dict]) -> list[dict]:
-    """Filter for NSE equity only."""
+    """Filter for NSE equity instruments only.
+
+    Args:
+        instruments: All instruments from API
+
+    Returns:
+        Filtered list with only NSE_EQ segment and EQ type
+    """
     return [
         inst for inst in instruments
         if inst.get("segment") == "NSE_EQ" and inst.get("instrument_type") == "EQ"
@@ -95,11 +139,25 @@ def _filter_nse_equity(instruments: list[dict]) -> list[dict]:
 
 @activity.defn
 async def fetch_base_universe() -> BaseUniverseData:
-    """
-    Fetch base universe: NSE EQ + MTF from Upstox.
+    """Fetch base universe: NSE EQ + MTF from Upstox.
+
+    This is the first step in universe setup. Fetches two datasets:
+    1. All NSE equity instruments (~2000 stocks)
+    2. MTF-eligible symbols (~200-300 stocks)
+
+    The MTF symbols will be used to enrich NSE EQ with quality flags.
 
     Returns:
-        BaseUniverseData with all NSE EQ instruments and MTF symbols.
+        BaseUniverseData: Contains:
+            - nse_eq_instruments: All NSE EQ instruments
+            - mtf_symbols: Set of MTF-eligible symbols
+            - nse_eq_count: Number of NSE EQ instruments
+            - mtf_count: Number of MTF symbols
+            - fetched_at: ISO timestamp
+
+    Raises:
+        requests.HTTPError: If Upstox API fails
+        json.JSONDecodeError: If response parsing fails
     """
     activity.logger.info("Fetching base universe from Upstox...")
 
@@ -125,11 +183,31 @@ async def fetch_base_universe() -> BaseUniverseData:
 
 @activity.defn
 async def fetch_nifty_indices() -> NiftyData:
-    """
-    Fetch Nifty indices constituents from NSE.
+    """Fetch Nifty indices constituents from NSE.
+
+    Fetches constituents of four major Nifty indices:
+    - Nifty 50: Top 50 companies by market cap
+    - Nifty 100: Top 100 companies
+    - Nifty 200: Top 200 companies
+    - Nifty 500: Top 500 companies (broad market)
+
+    Index membership is used as a quality signal:
+    - Nifty 50: Highest quality, mega caps
+    - Nifty 100-200: Large caps
+    - Nifty 500: Mid to large caps
+
+    Note: Includes 0.3s delay between requests to respect NSE rate limits.
 
     Returns:
-        NiftyData with all index constituents.
+        NiftyData: Contains:
+            - nifty_50: List of symbols in Nifty 50
+            - nifty_100: List of symbols in Nifty 100
+            - nifty_200: List of symbols in Nifty 200
+            - nifty_500: List of symbols in Nifty 500
+            - fetched_at: ISO timestamp
+
+    Raises:
+        requests.HTTPError: If NSE API fails
     """
     import time
 
@@ -168,19 +246,51 @@ async def enrich_and_score_universe(
     nifty_200: list[str],
     nifty_500: list[str],
 ) -> list[dict]:
-    """
-    Enrich stocks with quality scores.
+    """Enrich stocks with quality scores and liquidity tiers.
 
-    Priority order (MTF first):
-    1. MTF + Nifty 50 = Tier A (score 90-100)
-    2. MTF + Nifty 100/200 = Tier A (score 80-90)
-    3. MTF + Nifty 500 = Tier B (score 70-80)
-    4. MTF only = Tier B (score 60-70)
-    5. Nifty 500 (non-MTF) = Tier C (score 40-60)
-    6. Other NSE EQ = Excluded or Tier C (score < 40)
+    This is the core quality scoring algorithm. For each stock, it:
+    1. Checks MTF eligibility (PRIMARY signal)
+    2. Checks Nifty index membership (SECONDARY signal)
+    3. Assigns quality score (0-100) based on combined signals
+    4. Assigns liquidity tier (A/B/C/D)
+
+    Scoring Logic (MTF gets highest priority):
+
+    MTF-Eligible Stocks:
+        - MTF + Nifty 50: Score 95, Tier A (best quality)
+        - MTF + Nifty 100: Score 85, Tier A
+        - MTF + Nifty 200: Score 75, Tier B
+        - MTF + Nifty 500: Score 70, Tier B
+        - MTF only: Score 60, Tier B
+
+    Non-MTF Stocks:
+        - Nifty 50: Score 55, Tier C
+        - Nifty 100: Score 50, Tier C
+        - Nifty 200: Score 45, Tier C
+        - Nifty 500: Score 40, Tier C
+        - Others: Score 10, Tier D (excluded)
+
+    Args:
+        nse_eq_instruments: All NSE EQ instruments from Upstox
+        mtf_symbols: MTF-eligible symbols
+        nifty_50: Nifty 50 constituent symbols
+        nifty_100: Nifty 100 constituent symbols
+        nifty_200: Nifty 200 constituent symbols
+        nifty_500: Nifty 500 constituent symbols
 
     Returns:
-        List of enriched stock dicts.
+        List of enriched stock dicts, sorted by quality_score descending.
+        Each dict contains:
+            - symbol, name, isin, instrument_key (from Upstox)
+            - is_mtf: Boolean flag
+            - in_nifty_50/100/200/500: Boolean flags
+            - quality_score: 0-100 score
+            - liquidity_tier: "A"/"B"/"C"/"D"
+            - is_active: True
+            - last_updated: ISO timestamp
+
+    Note: Stocks with Tier D (score < 40) can be filtered out later.
+    Typically results in ~200-400 Tier A/B stocks.
     """
     activity.logger.info("Enriching and scoring universe...")
 
@@ -287,14 +397,33 @@ async def enrich_and_score_universe(
 
 @activity.defn
 async def save_enriched_universe(enriched_stocks: list[dict]) -> dict:
-    """
-    Save enriched universe to MongoDB.
+    """Save enriched universe to MongoDB stocks collection.
+
+    Performs complete replacement of universe:
+    1. Marks all existing stocks as inactive
+    2. Upserts all enriched stocks
+    3. Creates compound indexes for efficient querying
+
+    The indexes support:
+    - Fast lookup by symbol
+    - Filtering by quality_score and tier
+    - Sorting by quality metrics
 
     Args:
-        enriched_stocks: List of enriched stock dicts.
+        enriched_stocks: List of enriched stock dicts with quality scores
 
     Returns:
-        Stats about saved data.
+        Dict with statistics:
+            - total_saved: Number of stocks saved
+            - tier_a: Count of Tier A stocks
+            - tier_b: Count of Tier B stocks
+            - tier_c: Count of Tier C stocks
+            - mtf_count: Count of MTF-eligible stocks
+            - high_quality: Count with quality_score >= 60
+
+    Side Effects:
+        - Updates MongoDB stocks collection
+        - Creates indexes for optimal query performance
     """
     from trade_analyzer.db import get_database
 

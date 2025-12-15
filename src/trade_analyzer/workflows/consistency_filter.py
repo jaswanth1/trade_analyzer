@@ -1,11 +1,67 @@
 """Consistency filter workflow for Phase 3 - Weekly Return Consistency Engine.
 
-This workflow:
-1. Fetches momentum-qualified stocks from Phase 2
-2. Detects current market regime (BULL/SIDEWAYS/BEAR)
-3. Fetches weekly OHLCV for all stocks (batched)
-4. Calculates 9-metric consistency scores with regime-adaptive thresholds
-5. Saves results to MongoDB
+This module implements Phase 3 of the trading pipeline, which applies weekly
+return consistency filters to identify stocks with sustainable, predictable
+performance patterns.
+
+Pipeline Position: Phase 3 - Consistency Filter
+-----------------------------------------------
+Input: Momentum-qualified stocks from Phase 2 (~50-100 stocks)
+Output: Consistency-qualified stocks (~30-50 stocks)
+
+This is the THIRD filter focusing on weekly return patterns with regime-aware
+thresholds to ensure stocks perform consistently across market conditions.
+
+Workflow Flow:
+1. Fetch momentum-qualified symbols from Phase 2
+2. Detect current market regime (BULL/SIDEWAYS/BEAR) using Nifty data
+3. Fetch weekly OHLCV data (batched with rate limiting)
+4. Calculate 9-metric consistency framework with regime-adjusted thresholds
+5. Save results to MongoDB consistency_scores collection
+
+9-Metric Consistency Framework:
+- M1: Positive Weeks % (52W): >=65% in BULL, >=60% in SIDEWAYS, >=55% in BEAR
+- M2: +3% Weeks % (52W): 25-35% (strong weeks)
+- M3: Weekly Std Dev: <=6% in BULL, <=7% in SIDEWAYS/BEAR
+- M4: Sharpe Ratio (52W): >=0.15 in BULL, >=0.10 in SIDEWAYS/BEAR
+- M5: Consistency Score: >=65 (composite metric)
+- M6: Regime Score: >=1.0 (13W vs 52W performance)
+- M7: Max Drawdown: <=20%
+- M8: Consecutive Loss Weeks: <=3
+- M9: Recovery Speed: <5 weeks average
+
+Regime Detection:
+- BULL: Nifty above 200 DMA, upward trend, VIX < 20
+- SIDEWAYS: Nifty choppy around 200 DMA, VIX 15-25
+- BEAR: Nifty below 200 DMA, downward trend, VIX > 25
+
+Typical Funnel:
+~50-100 momentum -> ~70-90 analyzed -> ~30-50 consistency-qualified
+
+Inputs:
+- batch_size: Number of stocks to fetch per API batch (default 50)
+
+Outputs:
+- ConsistencyFilterResult containing:
+  - total_analyzed: Stocks analyzed with weekly data
+  - total_qualified: Stocks passing consistency filters
+  - avg_final_score: Average final composite score
+  - avg_consistency_score: Average consistency metric
+  - market_regime: Detected regime (BULL/SIDEWAYS/BEAR)
+  - top_10: Top 10 stocks by final score
+
+Retry Policy:
+- Initial interval: 2 seconds
+- Maximum interval: 60 seconds
+- Maximum attempts: 3
+- Backoff coefficient: 2.0
+
+Typical Runtime: 10-15 minutes
+
+Related Workflows:
+- MomentumFilterWorkflow (Phase 2): Provides input
+- VolumeFilterWorkflow (Phase 4A): Uses output
+- FullPipelineWorkflow: Orchestrates Phase 1-3
 """
 
 from dataclasses import dataclass
@@ -26,7 +82,18 @@ with workflow.unsafe.imports_passed_through():
 
 @dataclass
 class ConsistencyFilterResult:
-    """Result of consistency filter workflow."""
+    """Result of consistency filter workflow.
+
+    Attributes:
+        success: True if workflow completed without errors
+        total_analyzed: Total stocks analyzed with weekly data
+        total_qualified: Stocks passing all consistency filters
+        avg_final_score: Average final score (momentum × consistency)
+        avg_consistency_score: Average consistency metric (0-100)
+        market_regime: Detected regime (BULL/SIDEWAYS/BEAR)
+        top_10: Top 10 stocks by final score with key metrics
+        error: Error message if workflow failed, None otherwise
+    """
 
     success: bool
     total_analyzed: int
@@ -40,18 +107,42 @@ class ConsistencyFilterResult:
 
 @workflow.defn
 class ConsistencyFilterWorkflow:
-    """
-    Workflow to apply weekly return consistency filters.
+    """Workflow to apply weekly return consistency filters (Phase 3).
 
-    Phase 3 Implementation - 9-Metric Framework:
-    1. Positive Weeks % (52W): ≥65% (regime-adjusted)
-    2. +3% Weeks % (52W): 25-35%
-    3. Weekly Std Dev: ≤6% (regime-adjusted)
-    4. Sharpe Ratio: ≥0.15 (regime-adjusted)
-    5. Consistency Score: ≥65
-    6. Regime Score: ≥1.0 (13W vs 52W)
+    This workflow orchestrates consistency analysis using regime-aware
+    thresholds to identify stocks with predictable, sustainable performance
+    patterns across different market conditions.
 
-    Reduces ~50-100 momentum stocks to top 30-50 ultra-consistent candidates.
+    Activities Orchestrated:
+    1. fetch_momentum_qualified_symbols: Gets stocks from Phase 2
+    2. detect_current_regime: Detects market regime for threshold adjustment
+    3. fetch_weekly_data_batch: Fetches weekly OHLCV in batches
+    4. calculate_consistency_scores: Applies 9-metric framework
+    5. save_consistency_results: Saves to MongoDB consistency_scores collection
+
+    9-Metric Consistency Framework:
+    - M1: Positive Weeks % (52W): >=65% (regime-adjusted)
+    - M2: +3% Weeks % (52W): 25-35% (strong weeks)
+    - M3: Weekly Std Dev: <=6% (regime-adjusted)
+    - M4: Sharpe Ratio: >=0.15 (regime-adjusted)
+    - M5: Consistency Score: >=65 (composite metric)
+    - M6: Regime Score: >=1.0 (13W vs 52W performance comparison)
+    - M7: Max Drawdown: <=20%
+    - M8: Consecutive Loss Weeks: <=3
+    - M9: Recovery Speed: <5 weeks average
+
+    Regime-Adaptive Thresholds:
+    - BULL: Stricter thresholds (expect consistent gains)
+    - SIDEWAYS: Moderate thresholds (accept choppiness)
+    - BEAR: Relaxed thresholds (relative outperformance focus)
+
+    Error Handling:
+    - Batched fetching with retries for API resilience
+    - Continues processing even if some stocks fail
+    - Returns partial results with error flag
+
+    Returns:
+        ConsistencyFilterResult with qualified stocks and regime info
     """
 
     @workflow.run

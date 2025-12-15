@@ -1,12 +1,65 @@
 """Technical Setup Detection activities for Phase 4B.
 
-This module implements:
-1. Type A+: Enhanced Trend Pullback (Smart Support Detection)
-2. Type B+: Volatility Contraction Pattern (VCP) Breakout
-3. Type C+: Confirmed Breakout Retest (Role Reversal)
-4. Type D: Gap-Fill Continuation
+This module implements the technical pattern recognition phase that identifies
+specific, actionable trade setups with defined entry/stop/target levels.
 
-Detects 8-15 high-conviction trade setups from liquidity-qualified stocks.
+Pipeline Position: Phase 4B (after Volume/Liquidity Filter)
+Input: ~20-30 highly liquid stocks from Phase 4A
+Output: 8-15 technical setups with entry/stop/target levels
+
+The pattern detection focuses on institutional-grade setups that have:
+- Clear entry zones (not single price points)
+- Logical stop-loss levels (structure + volatility)
+- Minimum 2:1 reward:risk ratio
+- High probability of follow-through
+- Low subjectivity (rules-based detection)
+
+Four Setup Types Detected:
+
+Type A+: Enhanced Trend Pullback
+    - Stock in uptrend (higher highs/higher lows)
+    - Pullback 3-10% to rising 20/50 DMA
+    - Volume contracts during pullback (healthy)
+    - Entry: Near MA support
+    - Stop: Below swing low
+    - Confidence: 70-85%
+
+Type B+: Volatility Contraction Pattern (VCP)
+    - Sideways consolidation 3-8 weeks
+    - Range ≤12% (tight coiling)
+    - Volume declining during consolidation
+    - Breakout with volume >1.5x average
+    - Entry: At breakout + retest
+    - Stop: Below consolidation low
+    - Confidence: 75-90%
+
+Type C+: Confirmed Breakout Retest
+    - Breakout occurred 1-3 weeks ago
+    - Pullback testing breakout zone
+    - Holding above former resistance (role reversal)
+    - Lower volume on retest (healthy)
+    - Entry: At retest support
+    - Stop: Below retest low
+    - Confidence: 70-85%
+
+Type D: Gap-Fill Continuation
+    - Recent gap up >3% (strong move)
+    - Pullback to fill gap (profit-taking)
+    - Holding gap support
+    - Trend resumption signal
+    - Entry: At gap fill zone
+    - Stop: Below gap low
+    - Confidence: 65-80%
+
+Filter Criteria:
+    - R:R ratio ≥ 2.0 (Risk-On) or ≥ 2.5 (Choppy)
+    - Confidence ≥ 70%
+    - Stop distance ≤ 7% from entry
+    - All must pass for setup to qualify
+
+Ranking: Setups ranked by composite score (40% confidence + 30% R:R + 30% conditions met)
+
+Expected Output: 8-15 high-conviction setups ready for risk geometry
 """
 
 import asyncio

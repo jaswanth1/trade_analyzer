@@ -1,4 +1,72 @@
-"""Market data provider for historical OHLCV and technical indicators."""
+"""Market Data Provider for Historical OHLCV and Technical Indicators.
+
+This module provides comprehensive market data functionality using free APIs,
+primarily Yahoo Finance. It handles:
+- Historical OHLCV (Open, High, Low, Close, Volume) data
+- Technical indicator calculations (SMA, ATR, RSI, MACD, Bollinger Bands)
+- Relative strength analysis vs benchmarks
+- Weekly consistency metrics
+- Volume and liquidity analysis
+- Technical setup detection (Pullback, VCP, Retest, Gap-Fill)
+
+Data Source:
+    - Yahoo Finance API: https://query1.finance.yahoo.com/v8/finance/chart
+
+Rate Limits:
+    - Free API, no authentication required
+    - Recommended: 1 request per second
+    - Max 2000 requests per hour recommended
+    - Failures handled gracefully with None returns
+
+NSE Symbol Format:
+    - Indian stocks: {SYMBOL}.NS (e.g., "RELIANCE.NS")
+    - Nifty indices: ^NSEI (Nifty 50), ^CNX100 (Nifty 100), etc.
+
+Usage:
+    Basic OHLCV fetching:
+
+    >>> from trade_analyzer.data.providers.market_data import MarketDataProvider
+    >>>
+    >>> provider = MarketDataProvider()
+    >>>
+    >>> # Fetch daily OHLCV for a stock
+    >>> ohlcv = provider.fetch_ohlcv_yahoo("RELIANCE", days=365)
+    >>> if ohlcv:
+    ...     print(f"Fetched {len(ohlcv.data)} days of data")
+    ...     print(f"Latest close: {ohlcv.data['close'].iloc[-1]}")
+    >>>
+    >>> # Calculate technical indicators
+    >>> indicators = provider.calculate_indicators(ohlcv)
+    >>> if indicators:
+    ...     print(f"SMA 50: {indicators.sma_50}")
+    ...     print(f"RSI 14: {indicators.rsi_14}")
+    >>>
+    >>> # Fetch Nifty 50 data
+    >>> nifty = provider.fetch_nifty_ohlcv("NIFTY 50", days=365)
+
+    Weekly consistency analysis:
+
+    >>> # Fetch weekly data
+    >>> weekly = provider.fetch_weekly_ohlcv("RELIANCE", weeks=60)
+    >>> metrics = provider.calculate_weekly_consistency_metrics(weekly)
+    >>> if metrics:
+    ...     print(f"Positive weeks: {metrics['pos_pct_52w']}%")
+    ...     print(f"Sharpe ratio: {metrics['sharpe_52w']}")
+
+    Setup detection:
+
+    >>> # Detect all technical setups
+    >>> ohlcv = provider.fetch_ohlcv_yahoo("TCS", days=365)
+    >>> setups = provider.detect_all_setups(ohlcv.data)
+    >>> for setup in setups:
+    ...     print(f"{setup['type']}: Confidence {setup['confidence']}%")
+
+Notes:
+    - All calculations require minimum data (typically 200 days for indicators)
+    - Returns None gracefully on failures to allow pipeline continuation
+    - Handles missing/invalid data with dropna()
+    - All prices in INR for NSE stocks
+"""
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -14,7 +82,17 @@ YAHOO_BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
 
 @dataclass
 class OHLCVData:
-    """Historical OHLCV data for a symbol."""
+    """Historical OHLCV data for a symbol.
+
+    Container for historical price and volume data.
+
+    Attributes:
+        symbol: Stock symbol (without .NS suffix)
+        data: DataFrame with columns: date, open, high, low, close, volume
+        start_date: First date in the dataset
+        end_date: Last date in the dataset
+        fetched_at: Timestamp when data was fetched
+    """
 
     symbol: str
     data: pd.DataFrame  # columns: date, open, high, low, close, volume
@@ -29,7 +107,27 @@ class OHLCVData:
 
 @dataclass
 class TechnicalIndicators:
-    """Technical indicators for a symbol."""
+    """Technical indicators for a symbol.
+
+    Calculated technical indicators from OHLCV data.
+
+    Attributes:
+        symbol: Stock symbol
+        sma_20: 20-day simple moving average
+        sma_50: 50-day simple moving average
+        sma_200: 200-day simple moving average
+        slope_sma_20: Normalized slope of 20-DMA (daily change %)
+        slope_sma_50: Normalized slope of 50-DMA
+        slope_sma_200: Normalized slope of 200-DMA
+        atr_14: 14-day Average True Range
+        rsi_14: 14-day Relative Strength Index
+        avg_volume_20: 20-day average volume
+        high_52w: 52-week high
+        low_52w: 52-week low
+        close: Current close price
+        proximity_52w_high: Distance from 52w high (0-100, 100=at high)
+        calculated_at: Timestamp of calculation
+    """
 
     symbol: str
     sma_20: float
@@ -49,7 +147,19 @@ class TechnicalIndicators:
 
 
 class MarketDataProvider:
-    """Provider for market data using free APIs."""
+    """Provider for market data using free APIs.
+
+    Main provider for fetching historical price data and calculating
+    technical indicators and trading setups.
+
+    This provider is stateless except for the requests session.
+    All methods are safe to call concurrently.
+
+    Example:
+        >>> provider = MarketDataProvider()
+        >>> ohlcv = provider.fetch_ohlcv_yahoo("RELIANCE")
+        >>> indicators = provider.calculate_indicators(ohlcv)
+    """
 
     def __init__(self):
         self.session = requests.Session()
@@ -200,14 +310,26 @@ class MarketDataProvider:
             return None
 
     def calculate_indicators(self, ohlcv: OHLCVData) -> Optional[TechnicalIndicators]:
-        """
-        Calculate technical indicators from OHLCV data.
+        """Calculate technical indicators from OHLCV data.
+
+        Calculates all standard technical indicators used in the trading system.
+        Requires at least 200 days of data for accurate calculations.
 
         Args:
-            ohlcv: OHLCVData with historical prices.
+            ohlcv: OHLCVData with historical prices
 
         Returns:
-            TechnicalIndicators with calculated values.
+            TechnicalIndicators with calculated values, None if insufficient data
+
+        Raises:
+            None (returns None on failure for graceful degradation)
+
+        Example:
+            >>> ohlcv = provider.fetch_ohlcv_yahoo("TCS", days=365)
+            >>> indicators = provider.calculate_indicators(ohlcv)
+            >>> if indicators:
+            ...     print(f"RSI: {indicators.rsi_14:.2f}")
+            ...     print(f"52w high proximity: {indicators.proximity_52w_high:.1f}%")
         """
         df = ohlcv.data.copy()
 
@@ -498,14 +620,23 @@ class MarketDataProvider:
         return metrics if metrics else None
 
     def detect_market_regime(self, nifty_df: pd.DataFrame) -> str:
-        """
-        Detect market regime based on Nifty 50 position vs moving averages.
+        """Detect market regime based on Nifty 50 position vs moving averages.
+
+        Simplified regime detection using price vs moving averages.
+        For production use, see the full regime module with breadth/VIX analysis.
 
         Args:
             nifty_df: Nifty 50 daily OHLCV DataFrame
 
         Returns:
-            'BULL', 'SIDEWAYS', or 'BEAR'
+            'BULL' if price > 50 DMA by 5%
+            'BEAR' if price < 200 DMA
+            'SIDEWAYS' otherwise
+
+        Example:
+            >>> nifty_data = provider.fetch_nifty_ohlcv("NIFTY 50")
+            >>> regime = provider.detect_market_regime(nifty_data.data)
+            >>> print(f"Current regime: {regime}")
         """
         if nifty_df is None or len(nifty_df) < 200:
             return "SIDEWAYS"
@@ -777,8 +908,11 @@ class MarketDataProvider:
         }
 
     def detect_pullback_setup(self, indicators: dict) -> Optional[dict]:
-        """
-        Detect Type A: Enhanced Trend Pullback setup.
+        """Detect Type A: Enhanced Trend Pullback setup.
+
+        This is the primary setup type for the trading system. It identifies
+        stocks pulling back to support in a confirmed uptrend with volume
+        contraction.
 
         Criteria:
         1. Price >= 95% of 20/50-DMA (Dynamic support)
@@ -787,8 +921,19 @@ class MarketDataProvider:
         4. MACD histogram turning positive
         5. In uptrend (price > 50-DMA > 200-DMA)
 
+        Args:
+            indicators: Dict from calculate_setup_indicators()
+
         Returns:
-            Setup dict or None if not detected.
+            Setup dict with entry/stop/target levels, None if not detected
+
+        Example:
+            >>> indicators = provider.calculate_setup_indicators(df)
+            >>> setup = provider.detect_pullback_setup(indicators)
+            >>> if setup:
+            ...     print(f"Entry: {setup['entry_low']}-{setup['entry_high']}")
+            ...     print(f"Stop: {setup['stop']}, Target: {setup['target_1']}")
+            ...     print(f"R:R = {setup['rr_ratio']:.2f}")
         """
         df = indicators.get("df")
         if df is None or len(df) < 50:
@@ -868,17 +1013,28 @@ class MarketDataProvider:
         return None
 
     def detect_vcp_breakout_setup(self, indicators: dict) -> Optional[dict]:
-        """
-        Detect Type B: Volatility Contraction Pattern (VCP) Breakout.
+        """Detect Type B: Volatility Contraction Pattern (VCP) Breakout.
+
+        Identifies consolidation patterns with contracting volatility that
+        typically precede strong directional moves.
 
         Criteria:
-        1. Range contraction: Recent range <= 12% of ATR(20)
+        1. Range contraction: Recent range <= 12%
         2. Time consolidation: 21-40 days
         3. Declining volatility: ATR14 today < ATR14 21 days ago
-        4. Breakout potential: Price near upper range with volume
+        4. Breakout potential: Price near upper range
+
+        Args:
+            indicators: Dict from calculate_setup_indicators()
 
         Returns:
-            Setup dict or None if not detected.
+            Setup dict with entry/stop/target levels, None if not detected
+
+        Example:
+            >>> setup = provider.detect_vcp_breakout_setup(indicators)
+            >>> if setup:
+            ...     print(f"VCP detected: Range {setup['range_pct']:.1f}%")
+            ...     print(f"Entry above: {setup['entry_high']}")
         """
         df = indicators.get("df")
         if df is None or len(df) < 60:
@@ -1142,14 +1298,24 @@ class MarketDataProvider:
         return None
 
     def detect_all_setups(self, df: pd.DataFrame) -> list[dict]:
-        """
-        Detect all setup types for a stock.
+        """Detect all setup types for a stock.
+
+        Runs all setup detection algorithms and returns any that qualify.
+        A stock can have multiple setups simultaneously.
 
         Args:
-            df: OHLCV DataFrame
+            df: OHLCV DataFrame with at least 200 days
 
         Returns:
-            List of detected setups (can be multiple types).
+            List of setup dicts (can be empty if none detected)
+
+        Example:
+            >>> ohlcv = provider.fetch_ohlcv_yahoo("INFY", days=365)
+            >>> setups = provider.detect_all_setups(ohlcv.data)
+            >>> for setup in setups:
+            ...     print(f"{setup['type']}: {setup['confidence']}% confidence")
+            ...     print(f"  Entry: {setup['entry_low']}-{setup['entry_high']}")
+            ...     print(f"  R:R: {setup['rr_ratio']:.2f}")
         """
         indicators = self.calculate_setup_indicators(df)
         if indicators is None:

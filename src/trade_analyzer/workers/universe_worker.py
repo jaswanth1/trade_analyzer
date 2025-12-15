@@ -1,4 +1,57 @@
-"""Universe refresh worker for Trade Analyzer."""
+"""
+Universe refresh worker for Trade Analyzer.
+
+This is the main Temporal worker process that handles all workflow and activity
+execution for the trade analysis pipeline. It registers all workflows and activities
+across all 8 phases of the system.
+
+Worker Role:
+    - Polls Temporal task queue for workflow/activity tasks
+    - Executes all phases: Universe Setup, Momentum, Consistency, Volume,
+      Setup Detection, Fundamental, Risk Geometry, Portfolio Construction,
+      Execution Display, and Weekly Recommendations
+    - Handles retry policies, timeouts, and error recovery
+    - Runs continuously until interrupted
+
+Workflows Handled:
+    - Phase 1: UniverseRefreshWorkflow, UniverseSetupWorkflow, FundamentalDataRefreshWorkflow
+    - Phase 2: MomentumFilterWorkflow, UniverseAndMomentumWorkflow
+    - Phase 3: ConsistencyFilterWorkflow, FullPipelineWorkflow
+    - Phase 4: VolumeFilterWorkflow, SetupDetectionWorkflow, Phase4PipelineWorkflow
+    - Phase 5: RiskGeometryWorkflow (was Phase 6)
+    - Phase 6: PortfolioConstructionWorkflow (was Phase 7)
+    - Phase 7: PreMarketAnalysisWorkflow, PositionStatusWorkflow, FridayCloseWorkflow (was Phase 8)
+    - Phase 8: WeeklyRecommendationWorkflow (was Phase 9)
+
+Activities Registered:
+    - Universe setup: fetch NSE instruments, MTF data, Nifty indices
+    - Momentum: fetch market data, calculate momentum scores
+    - Consistency: fetch weekly data, detect regime, calculate consistency scores
+    - Volume: calculate liquidity metrics
+    - Setup detection: detect technical patterns, rank setups
+    - Fundamental: fetch fundamental data, institutional holdings
+    - Risk geometry: calculate position sizes, risk metrics
+    - Portfolio: correlation analysis, sector limits, portfolio construction
+    - Execution: gap analysis, position status, system health
+    - Recommendations: aggregate results, generate recommendations
+
+Task Queue:
+    - TASK_QUEUE_UNIVERSE_REFRESH (configurable)
+    - Default: "trade-analyzer-queue"
+
+Usage:
+    Run via CLI:
+        $ python -m trade_analyzer.workers.universe_worker
+
+    Or via Make:
+        $ make worker
+
+Architecture Notes:
+    - Long-running process (runs until interrupted)
+    - Auto-reconnects to Temporal on connection loss
+    - All activities are idempotent (safe to retry)
+    - Workflows use retry policies for transient failures
+"""
 
 import asyncio
 import logging
@@ -46,12 +99,15 @@ from trade_analyzer.activities.setup_detection import (
     get_active_setups,
     save_setup_results,
 )
-# Phase 5: Fundamental Intelligence
+# Fundamental activities (monthly refresh + Phase 1 filter)
 from trade_analyzer.activities.fundamental import (
+    apply_fundamental_filter,
     calculate_fundamental_scores,
     fetch_fundamental_data_batch,
     fetch_institutional_holdings_batch,
     fetch_setup_qualified_symbols,
+    fetch_universe_for_fundamentals,
+    get_fundamentally_qualified_for_momentum,
     get_fundamentally_qualified_symbols,
     save_fundamental_results,
 )
@@ -111,10 +167,10 @@ from trade_analyzer.workflows.setup_detection import (
     Phase4PipelineWorkflow,
     FullAnalysisPipelineWorkflow,
 )
-# Phase 5: Fundamental Intelligence
+# Fundamental Data Refresh (monthly - runs independently)
 from trade_analyzer.workflows.fundamental_filter import (
-    FundamentalFilterWorkflow,
-    Phase5PipelineWorkflow,
+    FundamentalDataRefreshWorkflow,
+    FundamentalFilterWorkflow,  # Backward compat alias
 )
 # Phase 6: Risk Geometry
 from trade_analyzer.workflows.risk_geometry import (
@@ -144,7 +200,33 @@ logger = logging.getLogger(__name__)
 
 
 async def run_universe_worker() -> None:
-    """Run the universe refresh worker."""
+    """
+    Run the universe refresh worker.
+
+    This is the main worker function that:
+    1. Connects to Temporal (Cloud or local)
+    2. Registers all workflows and activities
+    3. Starts polling the task queue for work
+    4. Runs indefinitely until interrupted (Ctrl+C)
+
+    The worker handles all 8 phases of the trading pipeline:
+    - Phase 1: Universe setup + fundamental filter (weekly)
+    - Phase 2: Momentum filter
+    - Phase 3: Consistency filter + regime detection
+    - Phase 4: Volume/liquidity + setup detection
+    - Phase 5: Risk geometry
+    - Phase 6: Portfolio construction
+    - Phase 7: Execution display (pre-market, position status, Friday close)
+    - Phase 8: Weekly recommendations
+
+    Note:
+        This is a long-running process. Use Ctrl+C to gracefully shutdown.
+        All in-flight activities will complete before shutdown.
+
+    Raises:
+        Exception: If worker fails to connect to Temporal or encounters
+                   fatal errors during execution.
+    """
     logger.info("Starting Trade Analyzer Worker...")
 
     client = await get_temporal_client()
@@ -154,32 +236,34 @@ async def run_universe_worker() -> None:
         client,
         task_queue=TASK_QUEUE_UNIVERSE_REFRESH,
         workflows=[
+            # Phase 1: Universe + Fundamentals (weekly filter uses cached data)
             UniverseRefreshWorkflow,
-            UniverseSetupWorkflow,
+            UniverseSetupWorkflow,  # Now includes fundamental filter step
+            FundamentalDataRefreshWorkflow,  # Monthly API refresh
+            FundamentalFilterWorkflow,  # Backward compat alias
+            # Phase 2: Momentum Filter
             MomentumFilterWorkflow,
             UniverseAndMomentumWorkflow,
+            # Phase 3: Consistency Filter
             ConsistencyFilterWorkflow,
             FullPipelineWorkflow,
-            # Phase 4 workflows
+            # Phase 4: Volume/Liquidity + Setup Detection
             VolumeFilterWorkflow,
             SetupDetectionWorkflow,
             Phase4PipelineWorkflow,
             FullAnalysisPipelineWorkflow,
-            # Phase 5 workflows
-            FundamentalFilterWorkflow,
-            Phase5PipelineWorkflow,
-            # Phase 6 workflows
+            # Phase 5: Risk Geometry (was Phase 6)
             RiskGeometryWorkflow,
             Phase6PipelineWorkflow,
-            # Phase 7 workflows
+            # Phase 6: Portfolio Construction (was Phase 7)
             PortfolioConstructionWorkflow,
             Phase7PipelineWorkflow,
-            # Phase 8 workflows
+            # Phase 7: Execution Display (was Phase 8)
             PreMarketAnalysisWorkflow,
             PositionStatusWorkflow,
             FridayCloseWorkflow,
             ExecutionDisplayWorkflow,
-            # Phase 9 workflows
+            # Phase 8: Weekly Recommendations (was Phase 9)
             WeeklyRecommendationWorkflow,
             WeeklyFullPipelineWorkflow,
         ],
@@ -219,19 +303,22 @@ async def run_universe_worker() -> None:
             enrich_setups_with_context,
             save_setup_results,
             get_active_setups,
-            # Fundamental activities (Phase 5)
-            fetch_setup_qualified_symbols,
+            # Fundamental activities (Phase 1 filter + monthly refresh)
+            apply_fundamental_filter,  # Phase 1: weekly filter using cached data
+            fetch_universe_for_fundamentals,  # Monthly: get symbols to refresh
+            get_fundamentally_qualified_for_momentum,  # Phase 2 input
+            fetch_setup_qualified_symbols,  # Legacy
             fetch_fundamental_data_batch,
             calculate_fundamental_scores,
             fetch_institutional_holdings_batch,
             save_fundamental_results,
             get_fundamentally_qualified_symbols,
-            # Risk geometry activities (Phase 6)
+            # Risk geometry activities (Phase 5, was Phase 6)
             fetch_fundamentally_enriched_setups,
             calculate_risk_geometry_batch,
             calculate_position_sizes,
             save_risk_geometry_results,
-            # Portfolio construction activities (Phase 7)
+            # Portfolio construction activities (Phase 6, was Phase 7)
             fetch_position_sized_setups,
             calculate_correlation_matrix,
             apply_correlation_filter,
@@ -239,7 +326,7 @@ async def run_universe_worker() -> None:
             construct_final_portfolio,
             save_portfolio_allocation,
             get_latest_portfolio_allocation,
-            # Execution activities (Phase 8)
+            # Execution activities (Phase 7, was Phase 8)
             fetch_current_prices,
             analyze_monday_gaps,
             calculate_sector_momentum,
@@ -249,7 +336,7 @@ async def run_universe_worker() -> None:
             calculate_system_health,
             save_monday_premarket_analysis,
             get_latest_premarket_analysis,
-            # Recommendation activities (Phase 9)
+            # Recommendation activities (Phase 8, was Phase 9)
             aggregate_phase_results,
             generate_recommendation_templates,
             save_weekly_recommendation,
@@ -264,7 +351,16 @@ async def run_universe_worker() -> None:
 
 
 def main() -> None:
-    """Entry point for the worker."""
+    """
+    Entry point for the worker.
+
+    This function is called when running the worker as a script or module.
+    It starts the async event loop and runs the worker until interrupted.
+
+    Usage:
+        $ python -m trade_analyzer.workers.universe_worker
+        $ make worker
+    """
     asyncio.run(run_universe_worker())
 
 
