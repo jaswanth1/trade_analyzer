@@ -17,6 +17,7 @@ dependencies = [
     "streamlit>=1.29.0",
     "requests>=2.31.0",
     "temporalio>=1.7.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.urls]
