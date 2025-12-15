@@ -46,6 +46,53 @@ from trade_analyzer.activities.setup_detection import (
     get_active_setups,
     save_setup_results,
 )
+# Phase 5: Fundamental Intelligence
+from trade_analyzer.activities.fundamental import (
+    calculate_fundamental_scores,
+    fetch_fundamental_data_batch,
+    fetch_institutional_holdings_batch,
+    fetch_setup_qualified_symbols,
+    get_fundamentally_qualified_symbols,
+    save_fundamental_results,
+)
+# Phase 6: Risk Geometry
+from trade_analyzer.activities.risk_geometry import (
+    calculate_position_sizes,
+    calculate_risk_geometry_batch,
+    fetch_fundamentally_enriched_setups,
+    save_risk_geometry_results,
+)
+# Phase 7: Portfolio Construction
+from trade_analyzer.activities.portfolio_construction import (
+    apply_correlation_filter,
+    apply_sector_limits,
+    calculate_correlation_matrix,
+    construct_final_portfolio,
+    fetch_position_sized_setups,
+    get_latest_portfolio_allocation,
+    save_portfolio_allocation,
+)
+# Phase 8: Execution
+from trade_analyzer.activities.execution import (
+    analyze_monday_gaps,
+    calculate_sector_momentum,
+    calculate_system_health,
+    fetch_current_prices,
+    generate_friday_summary,
+    generate_position_alerts,
+    get_latest_premarket_analysis,
+    save_monday_premarket_analysis,
+    update_position_status,
+)
+# Phase 9: Recommendations
+from trade_analyzer.activities.recommendation import (
+    aggregate_phase_results,
+    approve_weekly_recommendation,
+    expire_old_recommendations,
+    generate_recommendation_templates,
+    get_latest_weekly_recommendation,
+    save_weekly_recommendation,
+)
 from trade_analyzer.config import TASK_QUEUE_UNIVERSE_REFRESH
 from trade_analyzer.workers.client import get_temporal_client
 from trade_analyzer.workflows.universe import UniverseRefreshWorkflow
@@ -63,6 +110,33 @@ from trade_analyzer.workflows.setup_detection import (
     SetupDetectionWorkflow,
     Phase4PipelineWorkflow,
     FullAnalysisPipelineWorkflow,
+)
+# Phase 5: Fundamental Intelligence
+from trade_analyzer.workflows.fundamental_filter import (
+    FundamentalFilterWorkflow,
+    Phase5PipelineWorkflow,
+)
+# Phase 6: Risk Geometry
+from trade_analyzer.workflows.risk_geometry import (
+    RiskGeometryWorkflow,
+    Phase6PipelineWorkflow,
+)
+# Phase 7: Portfolio Construction
+from trade_analyzer.workflows.portfolio_construction import (
+    PortfolioConstructionWorkflow,
+    Phase7PipelineWorkflow,
+)
+# Phase 8: Execution
+from trade_analyzer.workflows.execution import (
+    PreMarketAnalysisWorkflow,
+    PositionStatusWorkflow,
+    FridayCloseWorkflow,
+    ExecutionDisplayWorkflow,
+)
+# Phase 9: Weekly Recommendations
+from trade_analyzer.workflows.weekly_recommendation import (
+    WeeklyRecommendationWorkflow,
+    FullPipelineWorkflow as WeeklyFullPipelineWorkflow,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -91,6 +165,23 @@ async def run_universe_worker() -> None:
             SetupDetectionWorkflow,
             Phase4PipelineWorkflow,
             FullAnalysisPipelineWorkflow,
+            # Phase 5 workflows
+            FundamentalFilterWorkflow,
+            Phase5PipelineWorkflow,
+            # Phase 6 workflows
+            RiskGeometryWorkflow,
+            Phase6PipelineWorkflow,
+            # Phase 7 workflows
+            PortfolioConstructionWorkflow,
+            Phase7PipelineWorkflow,
+            # Phase 8 workflows
+            PreMarketAnalysisWorkflow,
+            PositionStatusWorkflow,
+            FridayCloseWorkflow,
+            ExecutionDisplayWorkflow,
+            # Phase 9 workflows
+            WeeklyRecommendationWorkflow,
+            WeeklyFullPipelineWorkflow,
         ],
         activities=[
             # Basic universe activities
@@ -128,6 +219,43 @@ async def run_universe_worker() -> None:
             enrich_setups_with_context,
             save_setup_results,
             get_active_setups,
+            # Fundamental activities (Phase 5)
+            fetch_setup_qualified_symbols,
+            fetch_fundamental_data_batch,
+            calculate_fundamental_scores,
+            fetch_institutional_holdings_batch,
+            save_fundamental_results,
+            get_fundamentally_qualified_symbols,
+            # Risk geometry activities (Phase 6)
+            fetch_fundamentally_enriched_setups,
+            calculate_risk_geometry_batch,
+            calculate_position_sizes,
+            save_risk_geometry_results,
+            # Portfolio construction activities (Phase 7)
+            fetch_position_sized_setups,
+            calculate_correlation_matrix,
+            apply_correlation_filter,
+            apply_sector_limits,
+            construct_final_portfolio,
+            save_portfolio_allocation,
+            get_latest_portfolio_allocation,
+            # Execution activities (Phase 8)
+            fetch_current_prices,
+            analyze_monday_gaps,
+            calculate_sector_momentum,
+            update_position_status,
+            generate_position_alerts,
+            generate_friday_summary,
+            calculate_system_health,
+            save_monday_premarket_analysis,
+            get_latest_premarket_analysis,
+            # Recommendation activities (Phase 9)
+            aggregate_phase_results,
+            generate_recommendation_templates,
+            save_weekly_recommendation,
+            get_latest_weekly_recommendation,
+            approve_weekly_recommendation,
+            expire_old_recommendations,
         ],
     )
 

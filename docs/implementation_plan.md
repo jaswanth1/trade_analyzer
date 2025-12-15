@@ -24,8 +24,18 @@ This document tracks the implementation progress and roadmap for the Trade Analy
 | SetupDetectionWorkflow | DONE | Dashboard: "Run Setup Detection" | Trade Setups List |
 | Phase4PipelineWorkflow | DONE | Dashboard: "Phase 4 Pipeline" | Volume + Setup Results |
 | FullAnalysisPipelineWorkflow | DONE | Dashboard: "Full Analysis (1-4)" | Complete Pipeline Results |
-| RiskGeometryWorkflow | NOT STARTED | Auto | Position Sizes |
-| PortfolioConstructionWorkflow | NOT STARTED | Auto | Final Approvals |
+| FundamentalFilterWorkflow | DONE | Dashboard: "Run Fundamental Filter" | Fundamental Scores |
+| Phase5PipelineWorkflow | DONE | Dashboard: "Phase 5 Pipeline" | Fundamental + Holdings |
+| RiskGeometryWorkflow | DONE | Dashboard: "Run Risk Geometry" | Position Sizes |
+| Phase6PipelineWorkflow | DONE | Dashboard: "Phase 6 Pipeline" | Risk-Qualified Setups |
+| PortfolioConstructionWorkflow | DONE | Dashboard: "Run Portfolio Construction" | Final Positions |
+| Phase7PipelineWorkflow | DONE | Dashboard: "Phase 7 Pipeline" | Portfolio Allocation |
+| PreMarketAnalysisWorkflow | DONE | Dashboard: "Run Pre-Market Analysis" | Monday Gap Analysis |
+| PositionStatusWorkflow | DONE | Dashboard: "Update Position Status" | Position Alerts |
+| FridayCloseWorkflow | DONE | Dashboard: "Run Friday Close" | Week Summary |
+| ExecutionDisplayWorkflow | DONE | Dashboard: "Run Execution Display" | Full Execution View |
+| WeeklyRecommendationWorkflow | DONE | Dashboard: "Generate Recommendations" | Trade Templates |
+| WeeklyFullPipelineWorkflow | DONE | Dashboard: "Full Pipeline (4B-9)" | Complete Recommendations |
 
 ### Infrastructure Status
 
@@ -33,9 +43,12 @@ This document tracks the implementation progress and roadmap for the Trade Analy
 |-----------|--------|-------|
 | MongoDB Atlas | DONE | DigitalOcean, trade_analysis DB |
 | Temporal Cloud | DONE | ap-south-1, trade-discovere namespace |
-| Streamlit UI | DONE | Dashboard + Momentum Filter tab |
+| Streamlit UI | DONE | Dashboard with Phases 1-9 |
 | Docker Compose | DONE | UI + Worker services |
 | Yahoo Finance | DONE | Free OHLCV data (no auth needed) |
+| FMP API | DONE | Financial statements (income, balance, cash flow) |
+| Alpha Vantage API | DONE | Company overview data |
+| NSE Holdings | DONE | FII/DII shareholding patterns |
 | Upstox OAuth | NOT STARTED | Optional for real-time data |
 
 ---
@@ -459,49 +472,500 @@ Phase 4B: Setup Detection
 ~15-25 → ~8-15 Trade Setups (Pullback, VCP, Retest, Gap-Fill)
 ```
 
+### Session 5: Phases 5-9 - Fundamental Intelligence, Risk Management & Recommendations (Dec 2024)
+
+#### What Was Built
+
+| Component | File(s) | Status |
+|-----------|---------|--------|
+| Fundamental Data Provider | `data/providers/fundamental.py` | Done |
+| NSE Holdings Provider | `data/providers/nse_holdings.py` | Done |
+| Fundamental Activities | `activities/fundamental.py` | Done |
+| Risk Geometry Activities | `activities/risk_geometry.py` | Done |
+| Portfolio Construction Activities | `activities/portfolio_construction.py` | Done |
+| Execution Activities | `activities/execution.py` | Done |
+| Recommendation Activities | `activities/recommendation.py` | Done |
+| Trade Setup Templates | `templates/trade_setup.py` | Done |
+| Fundamental Filter Workflow | `workflows/fundamental_filter.py` | Done |
+| Risk Geometry Workflow | `workflows/risk_geometry.py` | Done |
+| Portfolio Construction Workflow | `workflows/portfolio_construction.py` | Done |
+| Execution Workflows | `workflows/execution.py` | Done |
+| Weekly Recommendation Workflow | `workflows/weekly_recommendation.py` | Done |
+| Worker Updates | `workers/universe_worker.py` | Done |
+| Workflow Starters | `workers/start_workflow.py` | Done |
+| UI Updates (Phases 5-9) | `ui/app.py` | Done |
+| Database Models (10 new) | `db/models.py` | Done |
+| Database Indexes | `db/connection.py` | Done |
+| Config Updates | `config.py` | Done |
+
+#### Phase 5: AI-Enhanced Fundamental Intelligence
+
+**Data Sources:**
+- **FMP API**: Income statements, balance sheets, cash flow statements
+- **Alpha Vantage API**: Company overview, EPS, PE ratios
+- **NSE API**: FII/DII shareholding patterns, promoter pledge data
+
+**5-Dimensional Fundamental Scoring (0-100):**
+```
+FUNDAMENTAL_SCORE = 30% × Growth_Score +
+                   25% × Profitability_Score +
+                   20% × Leverage_Score +
+                   15% × Cash_Flow_Score +
+                   10% × Earnings_Quality_Score
+```
+
+**Metrics Calculated:**
+| Category | Metrics |
+|----------|---------|
+| Growth | EPS QoQ Growth, Revenue YoY Growth |
+| Profitability | ROE, ROCE, Operating Margin |
+| Leverage | Debt/Equity Ratio |
+| Cash Flow | FCF Yield, Cash EPS vs Reported EPS |
+| Earnings Quality | Cash EPS / Reported EPS ratio |
+
+**Institutional Holdings Filter:**
+- FII Holding ≥ 10%
+- Total Institutional (FII + DII) ≥ 35%
+- Promoter Pledge ≤ 20%
+- FII Net Change (30D) ≥ 0
+
+**Qualification Rule:** At least 3/5 fundamental filters must pass
+
+**Activities (6):**
+- `fetch_setup_qualified_symbols()` → Get symbols with active setups
+- `fetch_fundamental_data_batch()` → Fetch from FMP + Alpha Vantage
+- `calculate_fundamental_scores()` → Apply 5-dimensional scoring
+- `fetch_institutional_holdings_batch()` → Get FII/DII from NSE
+- `save_fundamental_results()` → Persist to MongoDB
+- `get_fundamentally_qualified_symbols()` → Return qualified symbols
+
+#### Phase 6: Dynamic Risk Geometry
+
+**Multi-Method Stop-Loss Calculation:**
+```python
+Stop_Structure = Swing_Low × 0.99  # 1% below recent low
+Stop_Volatility = Entry - (2 × ATR14)  # 2 ATR distance
+Final_Stop = max(Stop_Structure, Stop_Volatility)  # Tighter of two
+```
+
+**Position Sizing Formula:**
+```python
+Base_Size = (Portfolio × Risk_Pct) / Risk_Per_Share
+Vol_Adjusted = Base_Size × (Nifty_ATR / Stock_ATR)
+Kelly_Fraction = (Win% × AvgWin - Loss% × AvgLoss) / AvgWin
+FINAL_SIZE = Base_Size × Vol_Adjusted × min(1.0, Kelly) × Regime_Mult
+```
+
+**Risk Constraints:**
+| Constraint | Value |
+|------------|-------|
+| Max Risk Per Trade | 1.5% |
+| Max Stop Distance | 8% |
+| Min R:R Ratio (Risk-On) | 2.0 |
+| Min R:R Ratio (Choppy) | 2.5 |
+| Max Kelly Fraction | 1.0 |
+
+**Activities (4):**
+- `fetch_fundamentally_enriched_setups()` → Get Phase 5 qualified setups
+- `calculate_risk_geometry_batch()` → Calculate stops and targets
+- `calculate_position_sizes()` → Apply sizing formula
+- `save_risk_geometry_results()` → Persist to MongoDB
+
+#### Phase 7: Portfolio Construction
+
+**Correlation Filter:**
+- Calculate rolling 60-day correlation matrix
+- Reject pairs with correlation > 0.70
+- Keep higher-ranked stock in correlated pairs
+
+**Sector Concentration Limits:**
+| Limit | Value |
+|-------|-------|
+| Max Stocks Per Sector | 3 |
+| Max Sector Allocation | 25% |
+| Max Single Position | 8% |
+| Min Cash Reserve | 25-35% |
+| Max Total Positions | 12 |
+
+**Portfolio Construction Algorithm:**
+1. Rank setups by overall quality score
+2. Apply correlation filter (remove highly correlated)
+3. Apply sector limits (max 3 per sector)
+4. Select top positions up to capital limit
+5. Calculate final allocations
+
+**Activities (7):**
+- `fetch_position_sized_setups()` → Get Phase 6 sized setups
+- `calculate_correlation_matrix()` → 60-day rolling correlations
+- `apply_correlation_filter()` → Remove correlated pairs
+- `apply_sector_limits()` → Enforce sector constraints
+- `construct_final_portfolio()` → Build final allocation
+- `save_portfolio_allocation()` → Persist to MongoDB
+- `get_latest_portfolio_allocation()` → Retrieve current portfolio
+
+#### Phase 8: Execution Display (UI Only)
+
+**Monday Pre-Market Analysis:**
+```python
+Gap Analysis Rules:
+- Gap Through Stop: SKIP (don't enter)
+- Small Gap Against (<2%): ENTER_AT_OPEN
+- Gap Above Entry (>2%): SKIP (don't chase)
+- Gap Below Entry (1-3%): WAIT_AND_WATCH
+```
+
+**Position Status Tracking:**
+- Current price vs entry price
+- Unrealized P&L and R-multiple
+- Distance to stop and targets
+- Alert generation (approaching stop, at target, etc.)
+
+**Friday Close Summary:**
+- Week's realized P&L
+- Unrealized P&L on open positions
+- Total R earned
+- Win rate for the week
+- System health score
+- Recommended action for next week
+
+**Activities (9):**
+- `fetch_current_prices()` → Get live prices
+- `analyze_monday_gaps()` → Gap contingency analysis
+- `calculate_sector_momentum()` → Sector strength
+- `update_position_status()` → Track active positions
+- `generate_position_alerts()` → Create alerts
+- `generate_friday_summary()` → Week summary
+- `calculate_system_health()` → Health metrics
+- `save_monday_premarket_analysis()` → Persist analysis
+- `get_latest_premarket_analysis()` → Retrieve analysis
+
+**Workflows (4):**
+- `PreMarketAnalysisWorkflow` → Monday 8:30 AM analysis
+- `PositionStatusWorkflow` → Intraday position updates
+- `FridayCloseWorkflow` → Week summary and review
+- `ExecutionDisplayWorkflow` → Full execution view
+
+#### Phase 9: Production Trade Setup Templates
+
+**Trade Setup Template Structure:**
+```python
+@dataclass
+class TradeSetupTemplate:
+    # Identification
+    week_display: str  # "Dec 16-20, 2024"
+    symbol: str
+    company_name: str
+    sector: str
+
+    # Phase Scores (0-100)
+    momentum_score: float
+    consistency_score: float
+    liquidity_score: float
+    fundamental_score: float
+    setup_confidence: float
+    final_conviction: float  # 0-10 scale
+
+    # Technical Context
+    current_price: float
+    high_52w: float
+    dma_20: float
+    dma_50: float
+    dma_200: float
+    atr_14: float
+
+    # Setup Details
+    setup_type: str
+    entry_low: float
+    entry_high: float
+    stop_loss: float
+    stop_distance_pct: float
+    target_1: float
+    target_2: float
+    rr_ratio: float
+
+    # Position Sizing
+    shares: int
+    investment_amount: float
+    risk_amount: float
+    position_pct: float
+
+    # Execution
+    gap_contingency: str
+    action_steps: list[str]
+    invalidation_conditions: list[str]
+```
+
+**Activities (6):**
+- `aggregate_phase_results()` → Combine all phase data
+- `generate_recommendation_templates()` → Create trade cards
+- `save_weekly_recommendation()` → Persist recommendations
+- `get_latest_weekly_recommendation()` → Retrieve current
+- `approve_weekly_recommendation()` → Mark as approved
+- `expire_old_recommendations()` → Clean up old entries
+
+**Workflows (2):**
+- `WeeklyRecommendationWorkflow` → Generate recommendation templates
+- `FullPipelineWorkflow` → Run complete Phase 4B-9 pipeline
+
+#### New MongoDB Collections (8)
+
+```javascript
+// fundamental_scores - Phase 5 scoring
+{
+  symbol: "RELIANCE",
+  eps_qoq_growth: 15.2,
+  revenue_yoy_growth: 12.8,
+  roce: 18.5,
+  roe: 22.3,
+  debt_equity: 0.45,
+  opm_margin: 16.2,
+  fcf_yield: 5.8,
+  earnings_quality_score: 92.5,
+  growth_score: 78.4,
+  profitability_score: 85.2,
+  leverage_score: 72.1,
+  cash_flow_score: 68.9,
+  fundamental_score: 78.6,
+  qualifies: true,
+  calculated_at: ISODate()
+}
+
+// institutional_holdings - FII/DII ownership
+{
+  symbol: "RELIANCE",
+  fii_holding_pct: 25.4,
+  dii_holding_pct: 18.2,
+  total_institutional: 43.6,
+  fii_net_30d: 0.8,
+  promoter_pledge_pct: 2.1,
+  qualifies: true,
+  fetched_at: ISODate()
+}
+
+// position_sizes - Phase 6 sizing
+{
+  symbol: "RELIANCE",
+  setup_id: "setup_123",
+  portfolio_value: 1000000,
+  risk_pct: 0.015,
+  entry_price: 2450,
+  stop_loss: 2380,
+  stop_distance_pct: 2.86,
+  risk_per_share: 70,
+  base_shares: 214,
+  vol_adjustment: 0.92,
+  kelly_fraction: 0.85,
+  regime_multiplier: 1.0,
+  final_shares: 167,
+  final_value: 409150,
+  final_risk: 11690,
+  position_pct: 40.9,
+  risk_qualifies: true,
+  calculated_at: ISODate()
+}
+
+// portfolio_allocations - Phase 7 final portfolio
+{
+  allocation_date: ISODate(),
+  regime_state: "risk_on",
+  regime_confidence: 0.85,
+  portfolio_value: 1000000,
+  positions: [
+    {symbol: "RELIANCE", shares: 167, value: 409150, weight: 40.9},
+    {symbol: "TCS", shares: 85, value: 323000, weight: 32.3}
+  ],
+  sector_allocation: {"Energy": 40.9, "IT": 32.3},
+  total_allocated: 732150,
+  allocated_pct: 73.2,
+  cash_reserve: 267850,
+  cash_pct: 26.8,
+  total_risk_pct: 2.8,
+  correlation_filtered: 2,
+  sector_filtered: 1,
+  status: "pending",
+  created_at: ISODate()
+}
+
+// monday_premarket - Phase 8 gap analysis
+{
+  analysis_date: ISODate(),
+  nifty_prev_close: 24500,
+  nifty_gap_pct: 0.45,
+  regime_state: "risk_on",
+  setup_analyses: [
+    {
+      symbol: "RELIANCE",
+      prev_close: 2450,
+      expected_open: 2462,
+      gap_pct: 0.49,
+      gap_vs_entry: "within_zone",
+      action: "ENTER_AT_OPEN",
+      reason: "Gap within entry zone"
+    }
+  ],
+  enter_count: 3,
+  skip_count: 1,
+  wait_count: 1,
+  sector_momentum: {"Energy": 1.2, "IT": 0.8}
+}
+
+// friday_summaries - Phase 8 week summary
+{
+  week_start: ISODate(),
+  week_end: ISODate(),
+  realized_pnl: 15420,
+  unrealized_pnl: 8750,
+  total_pnl: 24170,
+  total_r: 2.8,
+  trades_closed: 2,
+  trades_won: 2,
+  win_rate: 100,
+  open_positions: [...],
+  closed_positions: [...],
+  system_health_score: 85,
+  recommended_action: "CONTINUE"
+}
+
+// weekly_recommendations - Phase 9 master output
+{
+  week_start: ISODate(),
+  week_end: ISODate(),
+  week_display: "Dec 16-20, 2024",
+  market_regime: "risk_on",
+  regime_confidence: 0.85,
+  position_multiplier: 1.0,
+  total_setups: 5,
+  recommendations: [...],  // Full TradeSetupTemplate objects
+  portfolio_value: 1000000,
+  allocated_capital: 732150,
+  allocated_pct: 73.2,
+  total_risk_pct: 2.8,
+  status: "draft",
+  created_at: ISODate()
+}
+```
+
+#### UI Enhancements (Phases 5-9)
+
+**Phase 5 Section:**
+- Fundamental Qualified count, Total Analyzed, Pass Rate
+- Buttons: "Run Fundamental Filter", "Phase 5 Pipeline"
+- New "Fundamental Qualified" tab with scores
+
+**Phase 6 Section:**
+- Risk Qualified count, Average Stop %, Average R:R
+- Buttons: "Run Risk Geometry", "Phase 6 Pipeline"
+- New "Position Sizes" tab with sizing details
+
+**Phase 7 Section:**
+- Final Positions count, Allocated %, Cash Reserve %
+- Buttons: "Run Portfolio Construction", "Phase 7 Pipeline"
+- New "Portfolio Allocation" tab with positions
+
+**Phase 8 Section:**
+- Tabs: Monday Pre-Market, Position Status, Friday Summary
+- Monday: Gap analysis table with enter/skip/wait actions
+- Position: Current P&L, R-multiple, alerts
+- Friday: Week summary, system health, recommended action
+
+**Phase 9 Section:**
+- Market context banner (regime, confidence, multiplier)
+- Recommendation cards with full trade details
+- Buttons: "Generate Recommendations", "Full Pipeline (4B-9)"
+- Export functionality for trade templates
+
+#### Extended Pipeline Summary
+
+```
+Phase 1: Universe Setup
+~2400 NSE EQ → ~1400 High Quality (score ≥ 60)
+
+Phase 2: Momentum Filter
+~1400 → ~50-100 Momentum Qualified (4+/5 filters)
+
+Phase 3: Consistency Filter
+~50-100 → ~30-50 Consistency Qualified (5+/6 filters)
+
+Phase 4A: Volume & Liquidity Filter
+~30-50 → ~15-25 Liquidity Qualified (3+/4 filters)
+
+Phase 4B: Setup Detection
+~15-25 → ~8-15 Trade Setups (Pullback, VCP, Retest, Gap-Fill)
+
+Phase 5: Fundamental Intelligence
+~8-15 → ~6-10 Fundamentally Qualified (3+/5 filters + institutional)
+
+Phase 6: Risk Geometry
+~6-10 → ~5-8 Risk Qualified (R:R ≥ 2.0, stop ≤ 8%)
+
+Phase 7: Portfolio Construction
+~5-8 → ~3-7 Final Positions (correlation + sector limits)
+
+Phase 8: Execution Display
+UI only: Gap analysis, position tracking, week summary
+
+Phase 9: Weekly Recommendations
+~3-7 → Production trade setup templates with full details
+```
+
 #### Current Files Structure
 
 ```
 src/trade_analyzer/
 ├── __init__.py
 ├── main.py
-├── config.py                    # Hardcoded credentials (MongoDB, Temporal)
+├── config.py                         # Config (MongoDB, Temporal, API keys, Portfolio defaults)
 ├── db/
 │   ├── __init__.py
-│   ├── connection.py            # MongoDB singleton connection
-│   ├── models.py                # Pydantic models (StockDoc, TradeDoc, etc.)
-│   └── repositories.py          # Data access layer
+│   ├── connection.py                 # MongoDB singleton + indexes for all collections
+│   ├── models.py                     # Pydantic models (30+ document models)
+│   └── repositories.py               # Data access layer
 ├── data/
 │   ├── __init__.py
 │   └── providers/
 │       ├── __init__.py
-│       ├── upstox.py            # Upstox instrument fetcher
-│       ├── nse.py               # NSE Nifty indices fetcher
-│       └── market_data.py       # Yahoo Finance OHLCV + weekly + indicators + setups
+│       ├── upstox.py                 # Upstox instrument fetcher
+│       ├── nse.py                    # NSE Nifty indices fetcher
+│       ├── market_data.py            # Yahoo Finance OHLCV + indicators + setups
+│       ├── fundamental.py            # FMP + Alpha Vantage integration (Phase 5)
+│       └── nse_holdings.py           # NSE shareholding patterns (Phase 5)
 ├── activities/
 │   ├── __init__.py
-│   ├── universe.py              # Basic fetch/save activities
-│   ├── universe_setup.py        # Enriched universe with quality scoring
-│   ├── momentum.py              # 5 momentum filter activities (Phase 2)
-│   ├── consistency.py           # 9-metric consistency activities (Phase 3)
-│   ├── volume_liquidity.py      # Volume & liquidity activities (Phase 4A)
-│   └── setup_detection.py       # Setup detection activities (Phase 4B)
+│   ├── universe.py                   # Basic fetch/save activities
+│   ├── universe_setup.py             # Quality scoring activities
+│   ├── momentum.py                   # 5 momentum filter activities (Phase 2)
+│   ├── consistency.py                # 9-metric consistency activities (Phase 3)
+│   ├── volume_liquidity.py           # Volume & liquidity activities (Phase 4A)
+│   ├── setup_detection.py            # Setup detection activities (Phase 4B)
+│   ├── fundamental.py                # 6 fundamental activities (Phase 5)
+│   ├── risk_geometry.py              # 4 risk geometry activities (Phase 6)
+│   ├── portfolio_construction.py     # 7 portfolio activities (Phase 7)
+│   ├── execution.py                  # 9 execution activities (Phase 8)
+│   └── recommendation.py             # 6 recommendation activities (Phase 9)
+├── templates/
+│   ├── __init__.py
+│   └── trade_setup.py                # Trade setup template generator (Phase 9)
 ├── workflows/
 │   ├── __init__.py
-│   ├── universe.py              # Basic refresh workflow
-│   ├── universe_setup.py        # Full setup workflow with enrichment
-│   ├── momentum_filter.py       # Momentum + Combined workflows (Phase 2)
-│   ├── consistency_filter.py    # Consistency + Full Pipeline (Phase 3)
-│   ├── volume_filter.py         # Volume & Liquidity workflow (Phase 4A)
-│   └── setup_detection.py       # Setup Detection + Phase 4 Pipeline + Full Analysis (Phase 4B)
+│   ├── universe.py                   # Basic refresh workflow
+│   ├── universe_setup.py             # Full setup workflow with enrichment
+│   ├── momentum_filter.py            # Momentum + Combined workflows (Phase 2)
+│   ├── consistency_filter.py         # Consistency + Full Pipeline (Phase 3)
+│   ├── volume_filter.py              # Volume & Liquidity workflow (Phase 4A)
+│   ├── setup_detection.py            # Setup Detection + Phase 4 Pipeline (Phase 4B)
+│   ├── fundamental_filter.py         # Fundamental Filter + Phase 5 Pipeline
+│   ├── risk_geometry.py              # Risk Geometry + Phase 6 Pipeline
+│   ├── portfolio_construction.py     # Portfolio Construction + Phase 7 Pipeline
+│   ├── execution.py                  # PreMarket, PositionStatus, FridayClose (Phase 8)
+│   └── weekly_recommendation.py      # Weekly Recommendations + Full Pipeline (Phase 9)
 ├── workers/
 │   ├── __init__.py
-│   ├── client.py                # Temporal Cloud client
-│   ├── universe_worker.py       # Worker process (all phases)
-│   └── start_workflow.py        # Workflow trigger script (all phases)
+│   ├── client.py                     # Temporal Cloud client
+│   ├── universe_worker.py            # Worker process (all 22 workflows, 60+ activities)
+│   └── start_workflow.py             # Workflow trigger script (all workflows)
 └── ui/
     ├── __init__.py
-    ├── app.py                   # Streamlit app (Phase 1-4 complete)
+    ├── app.py                        # Streamlit app (Phases 1-9 complete)
     └── pages/
         └── __init__.py
 ```
@@ -701,91 +1165,111 @@ The entire system is built around **Temporal workflows** that produce actionable
 | RiskGeometry | Setups | Review position sizes |
 | PortfolioConstruction | **Setups** | **FINAL: Approve/reject recommendations** |
 
-### Workflow Files Structure (Planned)
+### Workflow Files Structure (IMPLEMENTED)
 
 ```
 src/trade_analyzer/
 ├── workflows/
-│   ├── universe.py              # Basic refresh (DONE)
-│   ├── universe_setup.py        # Full setup with enrichment (DONE)
-│   ├── market_data.py           # Historical data + indicators (Phase 2)
-│   ├── regime.py                # Regime assessment (Phase 3)
-│   ├── universe_filter.py       # Universe filtering (Phase 3)
-│   ├── setup_detection.py       # Setup pattern detection (Phase 3)
-│   ├── risk_geometry.py         # Risk validation (Phase 4)
-│   ├── portfolio.py             # Portfolio construction (Phase 4)
-│   └── weekly_recommendation.py # Master workflow (Phase 4)
+│   ├── universe.py              # Basic refresh ✅
+│   ├── universe_setup.py        # Full setup with enrichment ✅
+│   ├── momentum_filter.py       # Momentum + Combined workflows ✅
+│   ├── consistency_filter.py    # Consistency + Full Pipeline (1-3) ✅
+│   ├── volume_filter.py         # Volume & Liquidity ✅
+│   ├── setup_detection.py       # Setup Detection + Phase 4 Pipeline ✅
+│   ├── fundamental_filter.py    # Fundamental Filter + Phase 5 Pipeline ✅
+│   ├── risk_geometry.py         # Risk Geometry + Phase 6 Pipeline ✅
+│   ├── portfolio_construction.py # Portfolio + Phase 7 Pipeline ✅
+│   ├── execution.py             # PreMarket, PositionStatus, FridayClose ✅
+│   └── weekly_recommendation.py # Master workflow + Full Pipeline (4B-9) ✅
 ├── activities/
-│   ├── universe.py              # Universe fetch/save (DONE)
-│   ├── universe_setup.py        # Enrichment activities (DONE)
-│   ├── market_data.py           # OHLCV + indicators (Phase 2)
-│   ├── regime.py                # Regime calculation (Phase 3)
-│   ├── filters.py               # Universe filtering (Phase 3)
-│   ├── setups.py                # Setup detection (Phase 3)
-│   ├── risk.py                  # Risk calculation (Phase 4)
-│   └── portfolio.py             # Portfolio construction (Phase 4)
+│   ├── universe.py              # Universe fetch/save ✅
+│   ├── universe_setup.py        # Enrichment activities ✅
+│   ├── momentum.py              # 5 momentum filters ✅
+│   ├── consistency.py           # 9-metric consistency ✅
+│   ├── volume_liquidity.py      # Volume & liquidity ✅
+│   ├── setup_detection.py       # Setup detection ✅
+│   ├── fundamental.py           # Fundamental analysis ✅
+│   ├── risk_geometry.py         # Risk calculation ✅
+│   ├── portfolio_construction.py # Portfolio building ✅
+│   ├── execution.py             # Execution display ✅
+│   └── recommendation.py        # Recommendations ✅
 └── workers/
-    ├── universe_worker.py       # Universe workflows (DONE)
-    ├── market_data_worker.py    # Market data workflows (Phase 2)
-    └── recommendation_worker.py # Analysis + recommendation (Phase 3-4)
+    ├── client.py                # Temporal Cloud client ✅
+    ├── universe_worker.py       # All workflows (22 total) ✅
+    └── start_workflow.py        # All workflow starters ✅
 ```
 
 ### Task Queues
 
 | Queue | Workflows | Worker |
 |-------|-----------|--------|
-| `trade-analyzer-universe-refresh` | UniverseSetup | universe_worker.py |
-| `trade-analyzer-market-data` | MarketData | market_data_worker.py |
-| `trade-analyzer-recommendation` | Regime, Filter, Setup, Risk, Portfolio | recommendation_worker.py |
+| `trade-analyzer-universe-refresh` | All 22 workflows (Phases 1-9) | universe_worker.py |
+
+**Note:** A single worker handles all workflows for simplicity. All activities and workflows are registered in `universe_worker.py`.
 
 ---
 
 ## UI Pages & Workflow Integration
 
-### Dashboard Page (Current)
-**Workflows:** UniverseSetupWorkflow
-**Functions:**
+### Dashboard Page (All Phases Implemented)
+
+The dashboard is a single-page application with expandable sections for each phase:
+
+**Phase 1: Universe Setup**
 - Display universe statistics (Total, MTF, Tiers, High Quality)
 - "Setup Universe" button triggers UniverseSetupWorkflow
-- Show stock lists (All, High Quality, MTF Only)
-- Display last updated timestamp
-- (Phase 2) Show market data freshness
+- Tabs: All Stocks, High Quality, MTF Only
 
-### Regime Page (Phase 3)
-**Workflows:** RegimeAssessmentWorkflow
-**Functions:**
-- Display current regime state with probabilities
-- Show 4-factor breakdown (Trend, Breadth, Volatility, Leadership)
-- **OVERRIDE CONTROL**: Manually set regime if automated assessment seems wrong
-- Historical regime chart
-- Position multiplier display
+**Phase 2: Momentum Analysis**
+- Metrics: Momentum Qualified, Total Analyzed, Pass Rate
+- Buttons: "Run Momentum Filter", "Full Weekend Run"
+- Tab: Momentum Qualified
 
-### Setups Page (Phase 3-4)
-**Workflows:** SetupDetectionWorkflow, RiskGeometryWorkflow, PortfolioConstructionWorkflow
-**Functions:**
-- Display all detected setups with details
-- Filter by setup type (Pullback, Breakout, Retest)
-- Show position sizing for each setup
-- **APPROVAL CONTROLS**:
-  - Approve/Reject individual setups
-  - Modify entry/stop/target values
-  - Approve final portfolio
-- Export approved setups as order list
+**Phase 3: Consistency Analysis**
+- Metrics: Consistency Qualified, Total Analyzed, Pass Rate, Market Regime
+- Buttons: "Run Consistency Filter", "Full Pipeline (1-3)"
+- Tab: Consistency Qualified
 
-### Trades Page (Phase 5)
-**Workflows:** (Manual entry or execution integration)
-**Functions:**
-- Track executed trades
-- P&L and R-multiple tracking
-- Trade history
-- Performance metrics
+**Phase 4A: Volume & Liquidity**
+- Metrics: Liquidity Qualified, Total Analyzed, Pass Rate
+- Buttons: "Run Volume Filter"
+- Tab: Liquidity Qualified
 
-### Settings Page (Current - Placeholder)
-**Functions:**
-- Risk parameters (max risk %, R:R requirements)
+**Phase 4B: Trade Setups**
+- Metrics: Trade Setups, Setups Found, Qualified Rate
+- Buttons: "Run Setup Detection", "Phase 4 Pipeline", "Full Analysis (1-4)"
+- Tab: Trade Setups
+
+**Phase 5: Fundamental Analysis**
+- Metrics: Fundamental Qualified, Total Analyzed, Pass Rate
+- Buttons: "Run Fundamental Filter", "Phase 5 Pipeline"
+- Tab: Fundamental Qualified
+
+**Phase 6: Risk Geometry**
+- Metrics: Risk Qualified, Average Stop %, Average R:R
+- Buttons: "Run Risk Geometry", "Phase 6 Pipeline"
+- Tab: Position Sizes
+
+**Phase 7: Portfolio Construction**
+- Metrics: Final Positions, Allocated %, Cash Reserve %
+- Buttons: "Run Portfolio Construction", "Phase 7 Pipeline"
+- Tab: Portfolio Allocation
+
+**Phase 8: Execution Display**
+- Tabs: Monday Pre-Market, Position Status, Friday Summary
+- Buttons for each workflow type
+
+**Phase 9: Weekly Recommendations**
+- Market context banner (regime, confidence, multiplier)
+- Recommendation cards with full trade details
+- Buttons: "Generate Recommendations", "Full Pipeline (4B-9)"
+- Tab: Weekly Recommendations
+
+### Settings Page
+- Risk parameters configuration
 - Sector exposure limits
 - Position limits per regime
-- (Future) Notification settings
+- API key management
 
 ## Implementation Phases (Workflow-Centric)
 
@@ -852,15 +1336,13 @@ src/trade_analyzer/
 
 #### 3.1 RegimeAssessmentWorkflow (CRITICAL GATE)
 
-**UI:** Regime Page (display + OVERRIDE)
+**UI:** Integrated in Consistency Filter (auto-detected)
 
 | Activity | Description | Status |
 |----------|-------------|--------|
-| `calculate_trend_score()` | Nifty vs 20/50/200 DMA, MA slopes | Not Started |
-| `calculate_breadth_score()` | % universe above 200 DMA | Not Started |
-| `calculate_volatility_score()` | VIX level (12-18-25 bands), trend | Not Started |
-| `calculate_leadership_score()` | Cyclicals vs Defensives ratio | Not Started |
-| `classify_regime()` | Combine scores -> Risk-On/Choppy/Risk-Off | Not Started |
+| `detect_current_regime()` | Nifty trend analysis for regime state | Done |
+
+**Note:** Regime detection is integrated into the Consistency Filter workflow. The system automatically detects BULL/SIDEWAYS/BEAR based on Nifty's position relative to 50/200 DMA.
 
 **Regime Logic:**
 ```python
@@ -884,97 +1366,98 @@ else: multiplier = 0.5
 
 #### 3.2 UniverseFilterWorkflow
 
-**UI:** Dashboard (filtered list display)
+**Status:** ✅ DONE - Integrated across Phases 2-4
 
-| Activity | Description | Status |
-|----------|-------------|--------|
-| `apply_liquidity_filters()` | Turnover >= Rs.5 Cr, Market cap >= Rs.1000 Cr | Not Started |
-| `apply_momentum_filters()` | Within 10% of 52w high, MA alignment, RS > Nifty | Not Started |
-| `apply_consistency_filters()` | >55% positive weeks, statistical significance | Not Started |
-| `rank_by_factors()` | Composite score from momentum + consistency | Not Started |
+The universe filtering is implemented across multiple phases:
+- **Phase 2** (Momentum): 52W proximity, MA alignment, RS vs Nifty
+- **Phase 3** (Consistency): Weekly return consistency, regime-adaptive thresholds
+- **Phase 4A** (Volume/Liquidity): Turnover, circuit limits, gap analysis
 
-**Output:** ~80 stocks ranked by composite score
+**Output:** ~15-25 stocks after all filters
 
 #### 3.3 SetupDetectionWorkflow
 
-**UI:** Setups Page (display detected setups)
+**Status:** ✅ DONE - Phase 4B
 
 | Activity | Description | Status |
 |----------|-------------|--------|
-| `detect_pullback_setups()` | Uptrend + 3-10% pullback to rising MA | Not Started |
-| `detect_breakout_setups()` | 3-8 week consolidation + volume breakout | Not Started |
-| `detect_retest_setups()` | Recent breakout + retest of former resistance | Not Started |
-| `calculate_entry_stop_target()` | Entry zone, stop (swing/ATR), targets | Not Started |
+| `detect_setups_batch()` | Pullback, VCP, Retest, Gap-Fill detection | Done |
+| `filter_and_rank_setups()` | R:R validation, confidence scoring | Done |
+| `enrich_setups_with_context()` | Add momentum/consistency context | Done |
+| `save_setup_results()` | Persist to trade_setups collection | Done |
 
-**Output:** ~15-20 setups with price levels
+**Output:** ~8-15 setups with price levels
 
 ---
 
 ### Phase 4: Risk & Portfolio
 
-#### 4.1 RiskGeometryWorkflow
+**Note:** The original Phase 4 has been reorganized. Risk Geometry is now Phase 6, and Portfolio Construction is Phase 7. See Session 5 documentation for full details.
 
-**UI:** Setups Page (position sizing display)
+#### 4.1 RiskGeometryWorkflow (Now Phase 6)
 
-| Activity | Description | Status |
-|----------|-------------|--------|
-| `validate_reward_risk()` | Min 2.0R (Risk-On), 2.5R (Choppy) | Not Started |
-| `validate_stop_distance()` | Max 7% from entry | Not Started |
-| `calculate_position_size()` | Based on 1.5% risk per trade | Not Started |
-| `apply_regime_multiplier()` | Adjust size by regime state | Not Started |
-
-**Output:** ~8-12 valid setups with position sizes
-
-#### 4.2 PortfolioConstructionWorkflow
-
-**UI:** Setups Page (FINAL APPROVAL)
+**Status:** ✅ DONE
 
 | Activity | Description | Status |
 |----------|-------------|--------|
-| `calculate_correlations()` | Reject if correlation > 0.70 | Not Started |
-| `apply_sector_limits()` | Max 3 per sector, 25% exposure | Not Started |
-| `select_final_positions()` | Top 3-7 by composite score | Not Started |
-| `generate_recommendations()` | Full trade recommendation with all details | Not Started |
+| `fetch_fundamentally_enriched_setups()` | Get Phase 5 qualified setups | Done |
+| `calculate_risk_geometry_batch()` | Multi-method stop-loss calculation | Done |
+| `calculate_position_sizes()` | Volatility-adjusted Kelly sizing | Done |
+| `save_risk_geometry_results()` | Persist to position_sizes collection | Done |
 
-**Output:** 3-7 Trade Recommendations
+**Output:** ~5-8 risk-qualified setups with position sizes
 
-**UI Decision Point (FINAL APPROVAL):**
-- Display final recommendations with all details
-- **APPROVE/REJECT** buttons per setup
-- **MODIFY** entry/stop/target values
-- **EXPORT** approved as order list
-- Gap contingency rules displayed
+#### 4.2 PortfolioConstructionWorkflow (Now Phase 7)
+
+**Status:** ✅ DONE
+
+| Activity | Description | Status |
+|----------|-------------|--------|
+| `fetch_position_sized_setups()` | Get Phase 6 sized setups | Done |
+| `calculate_correlation_matrix()` | 60-day rolling correlations | Done |
+| `apply_correlation_filter()` | Reject pairs with correlation > 0.70 | Done |
+| `apply_sector_limits()` | Max 3 per sector, 25% exposure | Done |
+| `construct_final_portfolio()` | Build final allocation | Done |
+| `save_portfolio_allocation()` | Persist to portfolio_allocations | Done |
+
+**Output:** 3-7 Final Positions with allocations
 
 ---
 
-### Phase 5: Execution & Monitoring
+### Phase 5: Execution & Monitoring (Now Phase 8)
 
-#### 5.1 Trade Tracking
+**Status:** ✅ DONE - UI Display Only
 
-**UI:** Trades Page
-
-| Feature | Description | Status |
-|---------|-------------|--------|
-| Manual trade entry | Record executed trades | Not Started |
-| P&L calculation | Real-time P&L tracking | Not Started |
-| R-multiple tracking | Track performance in R terms | Not Started |
-| Trade history | All closed trades with details | Not Started |
-
-#### 5.2 System Health Monitoring
+#### 5.1 Pre-Market Analysis
 
 | Feature | Description | Status |
 |---------|-------------|--------|
-| Win rate (12w, 52w) | Rolling win rate calculation | Not Started |
-| Expectancy | Average R per trade | Not Started |
-| Drawdown monitor | Current and max drawdown | Not Started |
-| Health score | 0-100 composite score | Not Started |
-| Alerts | Warning when health < 50 | Not Started |
+| Monday gap analysis | Gap contingency evaluation | Done |
+| Sector momentum | Sector strength calculation | Done |
+| Entry/Skip decisions | Based on gap rules | Done |
+
+#### 5.2 Position Status Tracking
+
+| Feature | Description | Status |
+|---------|-------------|--------|
+| Current P&L | Real-time unrealized P&L | Done |
+| R-multiple tracking | Performance in R terms | Done |
+| Position alerts | Stop/target proximity alerts | Done |
+
+#### 5.3 System Health Monitoring
+
+| Feature | Description | Status |
+|---------|-------------|--------|
+| Friday summary | Week P&L and R totals | Done |
+| Win rate calculation | Rolling win rate | Done |
+| System health score | 0-100 composite score | Done |
+| Recommended action | CONTINUE/REDUCE/PAUSE/STOP | Done |
 
 ---
 
 ## Configuration
 
-All credentials configured in `src/trade_analyzer/config.py`. No environment variables needed.
+All credentials configured in `src/trade_analyzer/config.py`. Environment variables can override defaults.
 
 ### MongoDB (DigitalOcean)
 ```
@@ -991,10 +1474,23 @@ Region: Asia Pacific (Mumbai)
 Authentication: API Key
 ```
 
+### Fundamental Data APIs (Phase 5)
+```
+FMP_API_KEY: Financial Modeling Prep API key
+ALPHA_VANTAGE_API_KEY: Alpha Vantage API key
+```
+
+### Portfolio Configuration
+```python
+DEFAULT_PORTFOLIO_VALUE = 1_000_000  # Rs. 10 Lakhs
+DEFAULT_RISK_PCT = 0.015             # 1.5% per trade
+MAX_POSITIONS = 12
+MAX_SECTOR_PCT = 0.25                # 25% sector limit
+CASH_RESERVE_PCT = 0.30              # 30% cash reserve
+```
+
 ### Task Queues
-- `trade-analyzer-universe-refresh` - Universe data refresh
-- `trade-analyzer-regime-analysis` - Regime assessment (planned)
-- `trade-analyzer-pipeline` - Trading pipeline (planned)
+- `trade-analyzer-universe-refresh` - All workflows (Phases 1-9)
 
 ---
 
@@ -1112,7 +1608,9 @@ Daily:
 
 ## Collections Schema
 
-### stocks (Updated with Quality Fields)
+### Core Collections
+
+#### stocks (Updated with Quality Fields)
 ```javascript
 {
   symbol: "RELIANCE",
@@ -1126,22 +1624,19 @@ Daily:
   tick_size: 0.05,
   security_type: "EQ",
   short_name: "RELIANCE",
-
-  // Quality enrichment
   is_mtf: true,
   in_nifty_50: true,
   in_nifty_100: true,
   in_nifty_200: true,
   in_nifty_500: true,
-  quality_score: 95,        // 0-100
-  liquidity_tier: "A",      // A, B, C, D
-
+  quality_score: 95,
+  liquidity_tier: "A",
   is_active: true,
   last_updated: ISODate()
 }
 ```
 
-### trade_setups
+#### trade_setups
 ```javascript
 {
   stock_symbol: "RELIANCE",
@@ -1159,38 +1654,117 @@ Daily:
 }
 ```
 
-### trades
-```javascript
-{
-  stock_symbol: "RELIANCE",
-  setup_id: ObjectId(),
-  status: "active",
-  entry_date: ISODate(),
-  entry_price: 2465,
-  shares: 40,
-  stop_loss: 2380,
-  target_1: 2600,
-  exit_price: null,
-  pnl: 0,
-  r_multiple: 0
-}
-```
-
-### regime_assessments
+#### regime_assessments
 ```javascript
 {
   state: "risk_on",
-  risk_on_prob: 0.72,
-  choppy_prob: 0.20,
-  risk_off_prob: 0.08,
   confidence: 0.85,
   position_multiplier: 1.0,
-  timestamp: ISODate(),
-  indicators: {
-    nifty_vs_20dma: 1.02,
-    breadth_above_200dma: 0.65,
-    india_vix: 14.5
-  }
+  timestamp: ISODate()
+}
+```
+
+### Phase 5-9 Collections
+
+#### fundamental_scores (Phase 5)
+```javascript
+{
+  symbol: "RELIANCE",
+  eps_qoq_growth: 15.2,
+  revenue_yoy_growth: 12.8,
+  roce: 18.5,
+  roe: 22.3,
+  debt_equity: 0.45,
+  opm_margin: 16.2,
+  fcf_yield: 5.8,
+  fundamental_score: 78.6,
+  qualifies: true,
+  calculated_at: ISODate()
+}
+```
+
+#### institutional_holdings (Phase 5)
+```javascript
+{
+  symbol: "RELIANCE",
+  fii_holding_pct: 25.4,
+  dii_holding_pct: 18.2,
+  total_institutional: 43.6,
+  fii_net_30d: 0.8,
+  promoter_pledge_pct: 2.1,
+  qualifies: true,
+  fetched_at: ISODate()
+}
+```
+
+#### position_sizes (Phase 6)
+```javascript
+{
+  symbol: "RELIANCE",
+  setup_id: "setup_123",
+  portfolio_value: 1000000,
+  risk_pct: 0.015,
+  entry_price: 2450,
+  stop_loss: 2380,
+  final_shares: 167,
+  final_value: 409150,
+  risk_qualifies: true,
+  calculated_at: ISODate()
+}
+```
+
+#### portfolio_allocations (Phase 7)
+```javascript
+{
+  allocation_date: ISODate(),
+  regime_state: "risk_on",
+  portfolio_value: 1000000,
+  positions: [...],
+  sector_allocation: {...},
+  total_allocated: 732150,
+  allocated_pct: 73.2,
+  cash_reserve: 267850,
+  status: "pending",
+  created_at: ISODate()
+}
+```
+
+#### monday_premarket (Phase 8)
+```javascript
+{
+  analysis_date: ISODate(),
+  nifty_gap_pct: 0.45,
+  setup_analyses: [...],
+  enter_count: 3,
+  skip_count: 1,
+  wait_count: 1
+}
+```
+
+#### friday_summaries (Phase 8)
+```javascript
+{
+  week_start: ISODate(),
+  realized_pnl: 15420,
+  unrealized_pnl: 8750,
+  total_r: 2.8,
+  win_rate: 100,
+  system_health_score: 85,
+  recommended_action: "CONTINUE"
+}
+```
+
+#### weekly_recommendations (Phase 9)
+```javascript
+{
+  week_start: ISODate(),
+  week_display: "Dec 16-20, 2024",
+  market_regime: "risk_on",
+  recommendations: [...],
+  allocated_capital: 732150,
+  allocated_pct: 73.2,
+  status: "draft",
+  created_at: ISODate()
 }
 ```
 
@@ -1198,11 +1772,14 @@ Daily:
 
 ## Data Sources
 
-| Source | Data | Cost | Reliability |
-|--------|------|------|-------------|
-| Upstox | Instruments, OHLCV | Free API | Good |
-| NSE Website | Index constituents | Free | Rate limited |
-| India VIX | NSE website | Free | Daily only |
+| Source | Data | Cost | Status |
+|--------|------|------|--------|
+| Upstox | Instruments, OHLCV | Free API | ✅ Implemented |
+| Yahoo Finance | Historical OHLCV, Indicators | Free | ✅ Implemented |
+| NSE Website | Index constituents, Holdings | Free | ✅ Implemented |
+| FMP (Financial Modeling Prep) | Financial statements | Free tier + Paid | ✅ Implemented |
+| Alpha Vantage | Company overview | Free tier + Paid | ✅ Implemented |
+| India VIX | NSE website | Free | ✅ Integrated |
 
 ---
 
@@ -1223,31 +1800,58 @@ After 52 weeks of live/paper trading:
 
 ## Next Steps
 
-### Immediate: Test Phase 1-4
+### All Core Phases Complete ✅
+
+The Trade Analyzer system is now fully implemented with all 9 phases complete:
+- Phase 1-4: Universe → Momentum → Consistency → Volume/Liquidity → Setup Detection
+- Phase 5: Fundamental Intelligence with FMP + Alpha Vantage + NSE Holdings
+- Phase 6-7: Risk Geometry + Portfolio Construction
+- Phase 8: Execution Display (UI only)
+- Phase 9: Weekly Recommendations
+
+### Testing the System
+
 1. **Start Worker** - Run `make worker` to start Temporal worker
 2. **Start UI** - Run `make ui` to start Streamlit dashboard
-3. **Test Universe Setup** - Click "Setup Universe" button
-4. **Test Momentum Filter** - Click "Run Momentum Filter" button
-5. **Test Consistency Filter** - Click "Run Consistency Filter" button
-6. **Test Volume Filter** - Click "Run Volume Filter" button
-7. **Test Setup Detection** - Click "Run Setup Detection" button
-8. **Test Full Analysis** - Click "Full Analysis (1-4)" for end-to-end run
-9. **Verify Results** - Check all tabs for filtered stocks and trade setups
+3. **Set API Keys** - Configure FMP_API_KEY and ALPHA_VANTAGE_API_KEY in environment
+4. **Run Full Pipeline** - Click "Full Pipeline (4B-9)" in Phase 9 section
+5. **Review Results** - Check all tabs for filtered stocks and trade recommendations
 
-### Phase 5: Risk Geometry & Portfolio (NEXT)
-10. Create `workflows/risk_geometry.py` with RiskGeometryWorkflow
-11. Implement R:R validation (min 2.0R Risk-On, 2.5R Choppy)
-12. Position sizing based on 1.5% risk per trade
-13. Regime multiplier adjustment
-14. Create `workflows/portfolio.py` with PortfolioConstructionWorkflow
-15. Implement correlation filter (max 0.70), sector limits (3/sector, 25% max)
-16. Add approval controls to Setups page
+### Recommended Test Sequence
 
-### Phase 6: Execution & Tracking
-17. Build Trades page with manual entry
-18. Add P&L and R-multiple tracking
-19. Implement system health monitoring (win rate, expectancy, drawdown)
-20. Create master `workflows/weekly_recommendation.py`
+```bash
+# Terminal 1: Start worker
+make worker
+
+# Terminal 2: Start UI
+make ui
+
+# In browser (localhost:8501):
+# 1. Click "Setup Universe" in Phase 1 section
+# 2. Click "Full Weekend Run" in Phase 2 section
+# 3. Click "Full Pipeline (1-3)" in Phase 3 section
+# 4. Click "Full Analysis (1-4)" in Phase 4B section
+# 5. Click "Full Pipeline (4B-9)" in Phase 9 section
+# 6. Review recommendations in "Weekly Recommendations" tab
+```
+
+### Future Enhancements (Optional)
+
+| Enhancement | Description | Priority |
+|-------------|-------------|----------|
+| Upstox OAuth | Real-time price data integration | Low |
+| Broker Integration | Actual order placement | Low |
+| SMS/Email Alerts | Position alerts via notification | Medium |
+| Backtesting Module | Historical performance validation | Medium |
+| PDF Export | Generate PDF trade reports | Low |
+| Mobile App | React Native companion app | Low |
+
+### Maintenance Tasks
+
+1. **Weekly**: Run full pipeline on weekends
+2. **Monthly**: Review system health metrics
+3. **Quarterly**: Update fundamental scoring weights if needed
+4. **Annually**: Review and adjust all thresholds based on performance
 
 ---
 
@@ -1258,6 +1862,29 @@ After 52 weeks of live/paper trading:
 | Phase 1 | Universe Setup (NSE EQ + MTF + Quality Scoring) | ✅ DONE |
 | Phase 2 | Momentum Filter (5 filters, ~50-100 qualified) | ✅ DONE |
 | Phase 3 | Consistency Filter (9 metrics, regime-adaptive) | ✅ DONE |
-| Phase 4 | Setup Detection (Pullback, Breakout, Retest) | NOT STARTED |
-| Phase 5 | Risk Geometry & Portfolio Construction | NOT STARTED |
-| Phase 6 | Execution & Trade Tracking | NOT STARTED |
+| Phase 4A | Volume & Liquidity Filter (4 filters, ~15-25 qualified) | ✅ DONE |
+| Phase 4B | Setup Detection (Pullback, VCP, Retest, Gap-Fill) | ✅ DONE |
+| Phase 5 | Fundamental Intelligence (FMP, Alpha Vantage, NSE Holdings) | ✅ DONE |
+| Phase 6 | Risk Geometry (Multi-method stops, volatility-adjusted sizing) | ✅ DONE |
+| Phase 7 | Portfolio Construction (Correlation filter, sector limits) | ✅ DONE |
+| Phase 8 | Execution Display (Gap analysis, position tracking, UI only) | ✅ DONE |
+| Phase 9 | Weekly Recommendations (Production trade templates) | ✅ DONE |
+
+### System Capabilities Summary
+
+**Input:** ~2400 NSE EQ stocks
+**Output:** 3-7 production trade setup templates with full execution details
+
+**Complete Pipeline:**
+```
+~2400 → Phase 1 → ~1400 → Phase 2 → ~80 → Phase 3 → ~40
+    → Phase 4A → ~20 → Phase 4B → ~12 → Phase 5 → ~8
+    → Phase 6 → ~6 → Phase 7 → ~4 → Phase 8/9 → 3-7 Templates
+```
+
+**Total Implementation:**
+- 22 Temporal workflows
+- 60+ Temporal activities
+- 30+ MongoDB document models
+- 8 new collections
+- Full Streamlit dashboard with all phases

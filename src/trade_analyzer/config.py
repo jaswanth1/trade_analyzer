@@ -31,6 +31,17 @@ TASK_QUEUE_UNIVERSE_REFRESH = "trade-analyzer-universe-refresh"
 TASK_QUEUE_REGIME_ANALYSIS = "trade-analyzer-regime-analysis"
 TASK_QUEUE_TRADE_PIPELINE = "trade-analyzer-pipeline"
 
+# Fundamental Data API Keys (Phase 5)
+FMP_API_KEY = os.getenv("FMP_API_KEY", "")
+ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "")
+
+# Portfolio Configuration (Phase 6-7)
+DEFAULT_PORTFOLIO_VALUE = float(os.getenv("DEFAULT_PORTFOLIO_VALUE", "1000000"))  # 10 Lakhs
+DEFAULT_RISK_PCT = float(os.getenv("DEFAULT_RISK_PCT", "0.015"))  # 1.5% per trade
+MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "12"))
+MAX_SECTOR_PCT = float(os.getenv("MAX_SECTOR_PCT", "0.25"))  # 25% max sector exposure
+CASH_RESERVE_PCT = float(os.getenv("CASH_RESERVE_PCT", "0.30"))  # 30% cash reserve
+
 
 def get_mongo_uri() -> str:
     """Get MongoDB connection URI."""

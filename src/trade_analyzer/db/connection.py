@@ -96,6 +96,36 @@ class MongoDBConnection:
         self._database.system_health.create_index("timestamp")
         self._database.system_health.create_index([("timestamp", -1)])
 
+        # Phase 5: Fundamental scores indexes
+        self._database.fundamental_scores.create_index([("symbol", 1), ("calculated_at", -1)])
+        self._database.fundamental_scores.create_index([("fundamental_score", -1)])
+        self._database.fundamental_scores.create_index("qualifies")
+
+        # Phase 5: Institutional holdings indexes
+        self._database.institutional_holdings.create_index([("symbol", 1), ("fetched_at", -1)])
+        self._database.institutional_holdings.create_index("qualifies")
+
+        # Phase 6: Position sizes indexes
+        self._database.position_sizes.create_index([("symbol", 1), ("calculated_at", -1)])
+        self._database.position_sizes.create_index("risk_qualifies")
+        self._database.position_sizes.create_index([("overall_quality", -1)])
+
+        # Phase 7: Portfolio allocations indexes
+        self._database.portfolio_allocations.create_index([("allocation_date", -1)])
+        self._database.portfolio_allocations.create_index("status")
+        self._database.portfolio_allocations.create_index("regime_state")
+
+        # Phase 8: Monday pre-market indexes
+        self._database.monday_premarket.create_index([("analysis_date", -1)])
+
+        # Phase 8: Friday summaries indexes
+        self._database.friday_summaries.create_index([("week_start", -1)])
+
+        # Phase 9: Weekly recommendations indexes
+        self._database.weekly_recommendations.create_index([("week_start", -1)])
+        self._database.weekly_recommendations.create_index("status")
+        self._database.weekly_recommendations.create_index([("market_regime", 1), ("week_start", -1)])
+
     def disconnect(self) -> None:
         """Close MongoDB connection."""
         if self._client is not None:

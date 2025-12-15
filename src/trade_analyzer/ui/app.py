@@ -295,6 +295,165 @@ def render_dashboard():
 
     st.markdown("---")
 
+    # Phase 5: Fundamental Intelligence Section
+    st.subheader("Fundamental Intelligence (Phase 5)")
+
+    # Get Phase 5 stats
+    fund_qualified = db.fundamental_scores.count_documents({"qualifies": True})
+    fund_total = db.fundamental_scores.count_documents({})
+    inst_qualified = db.institutional_holdings.count_documents({"qualifies": True})
+
+    fund_latest = db.fundamental_scores.find_one({}, {"calculated_at": 1}, sort=[("calculated_at", -1)])
+    fund_updated = fund_latest.get("calculated_at") if fund_latest else None
+
+    fund_col1, fund_col2, fund_col3, fund_col4, fund_col5 = st.columns([1, 1, 1, 1, 2])
+
+    with fund_col1:
+        st.metric("Fundamental Qualified", fund_qualified)
+    with fund_col2:
+        st.metric("Institutional Qualified", inst_qualified)
+    with fund_col3:
+        st.metric("Total Analyzed", fund_total)
+    with fund_col4:
+        if fund_total > 0:
+            fund_pass_rate = (fund_qualified / fund_total) * 100
+            st.metric("Pass Rate", f"{fund_pass_rate:.1f}%")
+        else:
+            st.metric("Pass Rate", "N/A")
+    with fund_col5:
+        if st.button("Run Fundamental Filter", type="secondary", key="fund_btn"):
+            _run_fundamental_filter()
+
+    if fund_updated:
+        st.caption(f"Fundamental data updated: {fund_updated}")
+    else:
+        st.caption("No fundamental analysis yet - Click 'Run Fundamental Filter'")
+
+    st.markdown("---")
+
+    # Phase 6-7: Risk & Portfolio Section
+    st.subheader("Risk & Portfolio (Phase 6-7)")
+
+    # Get Phase 6-7 stats
+    risk_qualified = db.position_sizes.count_documents({"risk_qualifies": True})
+    portfolio_doc = db.portfolio_allocations.find_one(sort=[("allocation_date", -1)])
+    portfolio_positions = portfolio_doc.get("position_count", 0) if portfolio_doc else 0
+    portfolio_risk = portfolio_doc.get("total_risk_pct", 0) if portfolio_doc else 0
+    portfolio_cash = portfolio_doc.get("cash_reserve_pct", 0) if portfolio_doc else 0
+
+    portfolio_updated = portfolio_doc.get("allocation_date") if portfolio_doc else None
+
+    risk_col1, risk_col2, risk_col3, risk_col4, risk_col5 = st.columns([1, 1, 1, 1, 2])
+
+    with risk_col1:
+        st.metric("Risk Qualified", risk_qualified)
+    with risk_col2:
+        st.metric("Final Positions", portfolio_positions)
+    with risk_col3:
+        st.metric("Total Risk %", f"{portfolio_risk:.1f}%")
+    with risk_col4:
+        st.metric("Cash Reserve %", f"{portfolio_cash:.1f}%")
+    with risk_col5:
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("Run Risk Geometry", type="secondary", key="risk_btn"):
+                _run_risk_geometry()
+        with col_btn2:
+            if st.button("Run Portfolio", type="primary", key="portfolio_btn"):
+                _run_portfolio_construction()
+
+    if portfolio_updated:
+        st.caption(f"Portfolio updated: {portfolio_updated}")
+    else:
+        st.caption("No portfolio constructed yet - Run Phase 5-7 workflows")
+
+    st.markdown("---")
+
+    # Phase 8: Execution Display Section
+    st.subheader("Execution Display (Phase 8)")
+
+    # Get Phase 8 stats
+    premarket_doc = db.monday_premarket.find_one(sort=[("analysis_date", -1)])
+    friday_doc = db.friday_summaries.find_one(sort=[("week_start", -1)])
+
+    exec_col1, exec_col2, exec_col3, exec_col4 = st.columns([1, 1, 1, 2])
+
+    with exec_col1:
+        if premarket_doc:
+            st.metric("Enter", premarket_doc.get("enter_count", 0))
+        else:
+            st.metric("Enter", 0)
+    with exec_col2:
+        if premarket_doc:
+            st.metric("Skip", premarket_doc.get("skip_count", 0))
+        else:
+            st.metric("Skip", 0)
+    with exec_col3:
+        if friday_doc:
+            st.metric("System Health", f"{friday_doc.get('system_health', {}).get('health_score', 50)}/100")
+        else:
+            st.metric("System Health", "N/A")
+    with exec_col4:
+        col_btn1, col_btn2, col_btn3 = st.columns(3)
+        with col_btn1:
+            if st.button("Pre-Market", type="secondary", key="premarket_btn"):
+                _run_premarket_analysis()
+        with col_btn2:
+            if st.button("Position Status", type="secondary", key="position_btn"):
+                _run_position_status()
+        with col_btn3:
+            if st.button("Friday Close", type="secondary", key="friday_btn"):
+                _run_friday_close()
+
+    st.markdown("---")
+
+    # Phase 9: Weekly Recommendations Section
+    st.subheader("Weekly Recommendations (Phase 9)")
+
+    # Get Phase 9 stats
+    rec_doc = db.weekly_recommendations.find_one(
+        {"status": {"$ne": "expired"}},
+        sort=[("week_start", -1)]
+    )
+
+    rec_col1, rec_col2, rec_col3, rec_col4, rec_col5 = st.columns([1, 1, 1, 1, 2])
+
+    with rec_col1:
+        if rec_doc:
+            st.metric("Recommendations", rec_doc.get("total_setups", 0))
+        else:
+            st.metric("Recommendations", 0)
+    with rec_col2:
+        if rec_doc:
+            st.metric("Allocated %", f"{rec_doc.get('allocated_pct', 0):.1f}%")
+        else:
+            st.metric("Allocated %", "0%")
+    with rec_col3:
+        if rec_doc:
+            st.metric("Status", rec_doc.get("status", "N/A").upper())
+        else:
+            st.metric("Status", "N/A")
+    with rec_col4:
+        if rec_doc:
+            st.metric("Regime", rec_doc.get("market_regime", "N/A").upper())
+        else:
+            st.metric("Regime", "N/A")
+    with rec_col5:
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("Generate Recommendations", type="secondary", key="rec_btn"):
+                _run_weekly_recommendation()
+        with col_btn2:
+            if st.button("FULL WEEKLY PIPELINE", type="primary", key="weekly_btn"):
+                _run_complete_weekly_pipeline()
+
+    if rec_doc:
+        st.caption(f"Week of {rec_doc.get('week_start', 'N/A')}")
+    else:
+        st.caption("No recommendations yet - Run weekly pipeline")
+
+    st.markdown("---")
+
     # Stock Universe section
     st.subheader("Stock Universe")
 
@@ -1223,6 +1382,262 @@ def _run_full_analysis():
                         f"  {i+1}. {s['symbol']} ({s['type']}): Entry {s.get('entry_low', 0):.0f}-{s.get('entry_high', 0):.0f}"
                         for i, s in enumerate(result["top_setups"][:10])
                     )
+                )
+                st.rerun()
+            else:
+                st.error(f"Workflow failed: {result['error']}")
+        except Exception as e:
+            st.error(f"Failed to run workflow: {e}")
+
+
+# ============================================================================
+# Phase 5-9 Workflow Runners
+# ============================================================================
+
+
+def _run_fundamental_filter():
+    """Run the fundamental filter workflow via Temporal."""
+    import asyncio
+
+    from trade_analyzer.workers.start_workflow import start_fundamental_filter
+
+    with st.spinner("Running Fundamental Filter... This may take 15-30 minutes."):
+        try:
+            result = asyncio.run(start_fundamental_filter())
+
+            if result["success"]:
+                st.success(
+                    f"Fundamental Filter complete!\n\n"
+                    f"- Symbols Analyzed: {result['symbols_analyzed']}\n"
+                    f"- Fundamental Qualified: {result['fundamental_qualified']}\n"
+                    f"- Institutional Qualified: {result['institutional_qualified']}\n"
+                    f"- Combined Qualified: {result['combined_qualified']}\n"
+                    f"- Avg Score: {result['avg_fundamental_score']:.1f}\n\n"
+                    f"Top 10 by Fundamental Score:\n"
+                    + "\n".join(
+                        f"  {i+1}. {s['symbol']}: {s['fundamental_score']:.1f}"
+                        for i, s in enumerate(result["top_10"][:10])
+                    )
+                )
+                st.rerun()
+            else:
+                st.error(f"Workflow failed: {result['error']}")
+        except Exception as e:
+            st.error(f"Failed to run workflow: {e}")
+
+
+def _run_risk_geometry():
+    """Run the risk geometry workflow via Temporal."""
+    import asyncio
+
+    from trade_analyzer.workers.start_workflow import start_risk_geometry
+
+    with st.spinner("Running Risk Geometry... This may take 10-15 minutes."):
+        try:
+            result = asyncio.run(start_risk_geometry())
+
+            if result["success"]:
+                st.success(
+                    f"Risk Geometry complete!\n\n"
+                    f"- Setups Analyzed: {result['setups_analyzed']}\n"
+                    f"- Risk Qualified: {result['risk_qualified']}\n"
+                    f"- Total Risk: Rs.{result['total_risk']:,.0f}\n"
+                    f"- Total Value: Rs.{result['total_value']:,.0f}\n"
+                    f"- Avg R:R Ratio: {result['avg_rr_ratio']:.2f}\n\n"
+                    f"Top Positions:\n"
+                    + "\n".join(
+                        f"  {i+1}. {p['symbol']}: Entry {p['entry']:.0f}, Stop {p['stop']:.0f}, R:R {p['rr_ratio']:.1f}"
+                        for i, p in enumerate(result["top_positions"][:10])
+                    )
+                )
+                st.rerun()
+            else:
+                st.error(f"Workflow failed: {result['error']}")
+        except Exception as e:
+            st.error(f"Failed to run workflow: {e}")
+
+
+def _run_portfolio_construction():
+    """Run the portfolio construction workflow via Temporal."""
+    import asyncio
+
+    from trade_analyzer.workers.start_workflow import start_portfolio_construction
+
+    with st.spinner("Running Portfolio Construction... This may take 10-15 minutes."):
+        try:
+            result = asyncio.run(start_portfolio_construction())
+
+            if result["success"]:
+                sector_alloc = ", ".join(f"{k}: {v:.1f}%" for k, v in result["sector_allocation"].items())
+                st.success(
+                    f"Portfolio Construction complete!\n\n"
+                    f"- Input Setups: {result['setups_input']}\n"
+                    f"- After Correlation: {result['after_correlation_filter']}\n"
+                    f"- After Sector Limits: {result['after_sector_limits']}\n"
+                    f"- Final Positions: {result['final_positions']}\n"
+                    f"- Invested %: {result['total_invested_pct']:.1f}%\n"
+                    f"- Risk %: {result['total_risk_pct']:.1f}%\n"
+                    f"- Cash Reserve %: {result['cash_reserve_pct']:.1f}%\n"
+                    f"- Sector Allocation: {sector_alloc}\n\n"
+                    f"Final Positions:\n"
+                    + "\n".join(
+                        f"  {i+1}. {p['symbol']}: {p.get('shares', 0)} shares, Rs.{p.get('position_value', 0):,.0f}"
+                        for i, p in enumerate(result["positions"][:10])
+                    )
+                )
+                st.rerun()
+            else:
+                st.error(f"Workflow failed: {result['error']}")
+        except Exception as e:
+            st.error(f"Failed to run workflow: {e}")
+
+
+def _run_premarket_analysis():
+    """Run the pre-market analysis workflow via Temporal."""
+    import asyncio
+
+    from trade_analyzer.workers.start_workflow import start_premarket_analysis
+
+    with st.spinner("Running Pre-Market Analysis..."):
+        try:
+            result = asyncio.run(start_premarket_analysis())
+
+            if result["success"]:
+                st.success(
+                    f"Pre-Market Analysis complete!\n\n"
+                    f"- Total Setups: {result['total_setups']}\n"
+                    f"- ENTER: {result['enter_count']}\n"
+                    f"- SKIP: {result['skip_count']}\n"
+                    f"- WAIT: {result['wait_count']}\n\n"
+                    f"Gap Analysis:\n"
+                    + "\n".join(
+                        f"  {g['symbol']}: {g['action']} ({g['reason'][:50]}...)"
+                        for g in result["gap_analyses"][:10]
+                    )
+                )
+                st.rerun()
+            else:
+                st.error(f"Workflow failed: {result['error']}")
+        except Exception as e:
+            st.error(f"Failed to run workflow: {e}")
+
+
+def _run_position_status():
+    """Run the position status workflow via Temporal."""
+    import asyncio
+
+    from trade_analyzer.workers.start_workflow import start_position_status
+
+    with st.spinner("Updating Position Status..."):
+        try:
+            result = asyncio.run(start_position_status())
+
+            if result["success"]:
+                st.success(
+                    f"Position Status Updated!\n\n"
+                    f"- Total Positions: {result['total_positions']}\n"
+                    f"- In Profit: {result['in_profit']}\n"
+                    f"- In Loss: {result['in_loss']}\n"
+                    f"- Stopped Out: {result['stopped_out']}\n"
+                    f"- Target Hit: {result['target_hit']}\n"
+                    f"- Total P&L: Rs.{result['total_pnl']:,.0f}\n"
+                    f"- Total R: {result['total_r_multiple']:.2f}R\n\n"
+                    f"Alerts:\n"
+                    + "\n".join(result["alerts"][:10]) if result["alerts"] else "No alerts"
+                )
+                st.rerun()
+            else:
+                st.error(f"Workflow failed: {result['error']}")
+        except Exception as e:
+            st.error(f"Failed to run workflow: {e}")
+
+
+def _run_friday_close():
+    """Run the Friday close workflow via Temporal."""
+    import asyncio
+
+    from trade_analyzer.workers.start_workflow import start_friday_close
+
+    with st.spinner("Generating Friday Summary..."):
+        try:
+            result = asyncio.run(start_friday_close())
+
+            if result["success"]:
+                st.success(
+                    f"Friday Summary Generated!\n\n"
+                    f"**Week: {result['week_start']} to {result['week_end']}**\n\n"
+                    f"- Total Trades: {result['total_trades']}\n"
+                    f"- Wins: {result['wins']}, Losses: {result['losses']}\n"
+                    f"- Win Rate: {result['win_rate']:.1f}%\n"
+                    f"- Realized P&L: Rs.{result['realized_pnl']:,.0f}\n"
+                    f"- Unrealized P&L: Rs.{result['unrealized_pnl']:,.0f}\n"
+                    f"- Total P&L: Rs.{result['total_pnl']:,.0f}\n"
+                    f"- Total R: {result['total_r']:.2f}R\n\n"
+                    f"**System Health: {result['system_health_score']}/100**\n"
+                    f"Recommended Action: {result['recommended_action']}"
+                )
+                st.rerun()
+            else:
+                st.error(f"Workflow failed: {result['error']}")
+        except Exception as e:
+            st.error(f"Failed to run workflow: {e}")
+
+
+def _run_weekly_recommendation():
+    """Run the weekly recommendation workflow via Temporal."""
+    import asyncio
+
+    from trade_analyzer.workers.start_workflow import start_weekly_recommendation
+
+    with st.spinner("Generating Weekly Recommendations..."):
+        try:
+            result = asyncio.run(start_weekly_recommendation())
+
+            if result["success"]:
+                st.success(
+                    f"Weekly Recommendations Generated!\n\n"
+                    f"**Week of {result['week_display']}**\n"
+                    f"- Market Regime: {result['market_regime'].upper()}\n"
+                    f"- Confidence: {result['regime_confidence']:.0f}%\n\n"
+                    f"- Total Setups: {result['total_setups']}\n"
+                    f"- Allocated Capital: Rs.{result['allocated_capital']:,.0f}\n"
+                    f"- Allocated %: {result['allocated_pct']:.1f}%\n"
+                    f"- Total Risk %: {result['total_risk_pct']:.1f}%\n\n"
+                    f"View recommendations in the Phase 9 section."
+                )
+                st.rerun()
+            else:
+                st.error(f"Workflow failed: {result['error']}")
+        except Exception as e:
+            st.error(f"Failed to run workflow: {e}")
+
+
+def _run_complete_weekly_pipeline():
+    """Run the complete weekly pipeline (Phase 4B-9) via Temporal."""
+    import asyncio
+
+    from trade_analyzer.workers.start_workflow import start_complete_weekly_pipeline
+
+    with st.spinner("Running Complete Weekly Pipeline (Phase 4B-9)... This may take 45-60 minutes."):
+        try:
+            result = asyncio.run(start_complete_weekly_pipeline())
+
+            if result["success"]:
+                st.success(
+                    f"Complete Weekly Pipeline Finished!\n\n"
+                    f"**Week of {result['week_display']}**\n"
+                    f"- Market Regime: {result['market_regime'].upper()}\n\n"
+                    f"**Pipeline Summary:**\n"
+                    f"- Phase 4B (Setups): {result['phase_4_setups']}\n"
+                    f"- Phase 5 (Fundamental): {result['phase_5_fundamental']}\n"
+                    f"- Phase 6 (Risk): {result['phase_6_risk_qualified']}\n"
+                    f"- Phase 7 (Portfolio): {result['phase_7_final_positions']}\n\n"
+                    f"**Final Output:**\n"
+                    f"- Total Recommendations: {result['total_setups']}\n"
+                    f"- Allocated Capital: Rs.{result['allocated_capital']:,.0f}\n"
+                    f"- Allocated %: {result['allocated_pct']:.1f}%\n"
+                    f"- Total Risk %: {result['total_risk_pct']:.1f}%\n\n"
+                    f"View detailed recommendations in Phase 9 section."
                 )
                 st.rerun()
             else:
