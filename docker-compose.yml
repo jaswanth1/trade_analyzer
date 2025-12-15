@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  # Streamlit UI
+  ui:
+    build: .
+    container_name: trade-analyzer-ui
+    ports:
+      - "8501:8501"
+    command: streamlit run src/trade_analyzer/ui/app.py --server.address=0.0.0.0 --server.port=8501
+    restart: unless-stopped
+
+  # Temporal Worker
+  worker:
+    build: .
+    container_name: trade-analyzer-worker
+    command: python -m trade_analyzer.workers.universe_worker
+    restart: unless-stopped

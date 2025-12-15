@@ -8,22 +8,87 @@ Trade Analyzer is an institutional-grade weekly trading algorithm for NSE (Natio
 
 The system progressively filters ~500 stocks down to 3-7 high-conviction trades through multiple stages of analysis.
 
-## Build & Development Commands
+## Current Implementation Status
 
-This project uses UV for Python/dependency management and Make for task running.
+### Completed Components
 
-- `make dev` - Run the package in development mode
-- `make test` - Run tests with pytest
-- `make cov` - Run tests with coverage report
-- `make check` - Lint code with Ruff (staged files only)
-- `make format` - Format code with Ruff (staged files only)
-- `make type` - Type check with ty (staged files only)
-- `make allci` - Run all CI steps (check, format, type, cov)
-- `make doc` - Serve documentation locally with MkDocs
-- `make build` - Build package wheel with uv
-- `make publish` - Publish to PyPI
+1. **MongoDB Database Layer** (`src/trade_analyzer/db/`)
+   - Connection management with singleton pattern
+   - Pydantic models for all document types
+   - Repository pattern for data access (stocks, trades, setups, regime)
+   - Connected to DigitalOcean MongoDB Atlas
 
-To run a single test: `uv run pytest tests/test_main.py::test_function_name -v`
+2. **Upstox Data Provider** (`src/trade_analyzer/data/providers/`)
+   - Fetches NSE equity instruments from Upstox API
+   - Fetches MTF (Margin Trading Facility) instruments
+   - Transforms and stores in MongoDB
+
+3. **Streamlit UI** (`src/trade_analyzer/ui/`)
+   - Dashboard with universe stats
+   - Paginated stock lists (NSE EQ and MTF)
+   - Refresh button to update trading universe
+   - Settings page
+
+4. **Temporal Workflows** (`src/trade_analyzer/workflows/`, `src/trade_analyzer/activities/`)
+   - Universe refresh workflow with retry policies
+   - Activities for fetching and saving instruments
+   - Worker configuration for Temporal Cloud
+
+5. **Docker Infrastructure**
+   - Multi-stage Dockerfile for optimized builds
+   - docker-compose.yml for orchestration
+   - Support for both local Temporal and Temporal Cloud
+
+6. **Quality Scoring System** (`src/trade_analyzer/activities/universe_setup.py`)
+   - Tier-based scoring: A (MTF + Nifty 50), B (MTF + Nifty 100), C (MTF + Nifty 500), D (MTF only)
+   - Liquidity tier calculation based on index membership
+   - UniverseSetupWorkflow for orchestrating quality enrichment
+
+### Implementation Plan
+
+For detailed development tracking, decisions, and roadmap, see **[docs/implementation_plan.md](docs/implementation_plan.md)**.
+
+### Cloud Services (Always Connected)
+
+All credentials are configured in `src/trade_analyzer/config.py`. No environment variables needed.
+
+**MongoDB (DigitalOcean)**
+```
+Host: mongodb+srv://db-trading-setup-4aad9e87.mongo.ondigitalocean.com
+Database: trade_analysis
+```
+
+**Temporal Cloud**
+```
+Address: ap-south-1.aws.api.temporal.io:7233
+Namespace: trade-discovere.y8vfp
+Region: Asia Pacific (Mumbai)
+```
+
+## Commands
+
+### Run Locally
+```bash
+make ui        # Start Streamlit UI (localhost:8501)
+make worker    # Start Temporal worker
+make refresh   # Trigger universe refresh workflow
+```
+
+### Run in Docker
+```bash
+make up        # Start UI + Worker in Docker
+make down      # Stop all services
+make logs      # View logs
+```
+
+### Development
+```bash
+make test      # Run tests
+make cov       # Run tests with coverage
+make check     # Lint with Ruff
+make format    # Format with Ruff
+make allci     # Run all CI steps
+```
 
 ## Critical System Insights
 
@@ -63,7 +128,33 @@ Stamp duty = ₹15
 
 ## Architecture
 
-### Directory Structure
+### Current Directory Structure (Implemented)
+```
+src/trade_analyzer/
+├── config.py                   # Configuration (MongoDB, Temporal)
+├── db/                         # Database layer
+│   ├── connection.py           # MongoDB connection manager
+│   ├── models.py               # Pydantic document models
+│   └── repositories.py         # Data access repositories
+├── data/
+│   └── providers/
+│       ├── upstox.py           # Upstox instruments provider
+│       └── nse.py              # NSE Nifty indices provider
+├── ui/
+│   └── app.py                  # Streamlit dashboard (all-in-one)
+├── workflows/                  # Temporal workflows
+│   ├── universe.py             # Basic universe refresh workflow
+│   └── universe_setup.py       # Full universe setup with quality scoring
+├── activities/                 # Temporal activities
+│   ├── universe.py             # Basic fetch/save activities
+│   └── universe_setup.py       # Quality scoring activities
+└── workers/                    # Temporal workers
+    ├── client.py               # Temporal client configuration
+    ├── universe_worker.py      # Universe refresh worker
+    └── start_workflow.py       # Workflow starter script
+```
+
+### Planned Directory Structure (To Be Implemented)
 ```
 src/trade_analyzer/
 ├── pipeline/                    # Multi-stage filtering pipeline
@@ -73,18 +164,10 @@ src/trade_analyzer/
 │   ├── setups.py               # Technical setup detection
 │   ├── risk.py                 # Risk geometry filter
 │   └── portfolio.py            # Portfolio construction
-├── data/
-│   ├── providers/              # NSE, yfinance, screener adapters
-│   ├── cache.py                # Local caching layer
-│   └── validation.py           # Data quality checks
-├── models/                     # Dataclasses for all entities
 ├── indicators/                 # Technical indicator calculations
 ├── execution/                  # Gap handling, order generation
 ├── monitoring/                 # Health metrics, trade tracking
-├── output/                     # Report generation
-└── utils/
-tests/
-docs/
+└── output/                     # Report generation
 ```
 
 ### Pipeline Flow

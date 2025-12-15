@@ -1,24 +1,51 @@
-FROM python:3.13-slim-bullseye
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+# Trade Analyzer Dockerfile
+# Multi-stage build for optimized image size
 
-ENV UV_COMPILE_BYTECODE=1
-ENV UV_NO_CACHE=1
+FROM python:3.13-slim as builder
 
-RUN apt update && \
-    apt install -y --no-install-recommends \
+# Install uv for fast dependency management
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Install build dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
     build-essential \
-    cmake \
-    curl \
-    gcc \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
+# Set working directory
 WORKDIR /app
-COPY README.md /app/
-COPY pyproject.toml /app/
-RUN uv sync --no-install-project --no-dev
-COPY src/modern_python_boilerplate /app/modern_python_boilerplate
 
-EXPOSE 8000
+# Copy dependency files
+COPY pyproject.toml uv.lock* ./
+COPY README.md ./
 
-CMD ["uv", "run", "modern_python_boilerplate/main.py"]
+# Create virtual environment and install dependencies
+RUN uv venv /app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+RUN uv sync --frozen --no-dev || uv sync --no-dev
+
+# Copy source code
+COPY src/ ./src/
+
+# Install the package
+RUN uv pip install -e .
+
+# Production image
+FROM python:3.13-slim as production
+
+WORKDIR /app
+
+# Copy virtual environment from builder
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/src /app/src
+
+# Set environment variables
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Expose Streamlit port
+EXPOSE 8501
+
+# Default command (can be overridden in docker-compose)
+CMD ["python", "-m", "trade_analyzer.workers.universe_worker"]

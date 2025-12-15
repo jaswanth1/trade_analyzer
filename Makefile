@@ -2,26 +2,39 @@
 
 help:
 	@echo "Usage:"
-	@echo "  make dev                Run the package with developer settings"
-	@echo "  make prod               Run the pacakge with production settings"
-	@echo "  make test               CI: Run tests"
-	@echo "  make cov                CI: Run test and calculate coverage"
-	@echo "  make check              CI: Lint the code"
-	@echo "  make format             CI: Format the code"
-	@echo "  make type               CI: Check typing"
-	@echo "  make doc                Run local documentation server"
-	@echo "  make build              Build the package wheel before publishing to Pypi"
-	@echo "  make publish            Publish package to Pypi"
-	@echo "  make dockerbuild        Build the docker image"
-	@echo "  make dockerrun          Run the docker image"
-	@echo "  make allci              Run all CI steps (check, format, type, test coverage)"
+	@echo "  make ui                 Run the Streamlit UI"
+	@echo "  make worker             Run the Temporal worker"
+	@echo "  make refresh            Trigger universe refresh workflow"
+	@echo "  make up                 Start all services in Docker"
+	@echo "  make down               Stop all Docker services"
+	@echo "  make logs               View Docker logs"
+	@echo "  make test               Run tests"
+	@echo "  make cov                Run tests with coverage"
+	@echo "  make check              Lint code with Ruff"
+	@echo "  make format             Format code with Ruff"
+	@echo "  make allci              Run all CI steps"
 
-dev:
-	uv run trade_analyzer
+# Application
+ui:
+	uv run streamlit run src/trade_analyzer/ui/app.py
 
-prod:
-	uv run trade_analyzer
+worker:
+	uv run python -m trade_analyzer.workers.universe_worker
 
+refresh:
+	uv run python -m trade_analyzer.workers.start_workflow
+
+# Docker
+up:
+	docker-compose up -d --build
+
+down:
+	docker-compose down
+
+logs:
+	docker-compose logs -f
+
+# CI
 test:
 	uv run pytest tests/
 
@@ -29,34 +42,12 @@ cov:
 	uv run pytest --cov=src/trade_analyzer tests/ --cov-report=term-missing
 
 check:
-	uv run ruff check $$(git diff --name-only --cached -- '*.py')
+	uv run ruff check src/
 
 format:
-	uv run ruff format $$(git diff --name-only --cached -- '*.py')
-
-type:
-	uv run ty check $$(git diff --name-only --cached -- '*.py')
-
-doc:
-	uvx --with mkdocstrings  --with mkdocs-material --with mkdocstrings-python --with mkdocs-include-markdown-plugin mkdocs serve
-
-build:
-	uv build
-
-publish:
-	uv publish
-
-commit:
-	uv run pre-commit
-
-dockerbuild:
-	docker build -t trade-analyzer:latest .
-
-dockerrun:
-	docker run --rm trade-analyzer:latest
+	uv run ruff format src/
 
 allci:
 	$(MAKE) check
 	$(MAKE) format
-	$(MAKE) type
 	$(MAKE) cov

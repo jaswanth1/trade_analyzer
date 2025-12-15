@@ -12,6 +12,11 @@ maintainers = [
 ]
 dependencies = [
     "upstox-python-sdk>=2.19.0",
+    "pymongo[srv]>=4.6.0",
+    "pydantic>=2.5.0",
+    "streamlit>=1.29.0",
+    "requests>=2.31.0",
+    "temporalio>=1.7.0",
 ]
 
 [project.urls]
@@ -38,6 +43,9 @@ build-backend = "uv_build"
 
 [project.scripts]
 trade_analyzer = "trade_analyzer.main:hello_world"
+trade_analyzer_ui = "streamlit.web.cli:main"
+trade_analyzer_worker = "trade_analyzer.workers.universe_worker:main"
+trade_analyzer_refresh = "trade_analyzer.workers.start_workflow:main"
 
 [tool.ruff]
 target-version = "py313"
