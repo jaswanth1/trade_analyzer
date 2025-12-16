@@ -353,7 +353,7 @@ class FullPipelineResult:
 
 
 @workflow.defn
-class FullPipelineWorkflow:
+class WeeklyFullPipelineWorkflow:
     """Complete End-to-End Pipeline Workflow (Phase 4B → 8).
 
     This is the MASTER WORKFLOW for weekend analysis, orchestrating the final

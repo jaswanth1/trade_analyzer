@@ -170,7 +170,6 @@ from trade_analyzer.workflows.setup_detection import (
 # Fundamental Data Refresh (monthly - runs independently)
 from trade_analyzer.workflows.fundamental_filter import (
     FundamentalDataRefreshWorkflow,
-    FundamentalFilterWorkflow,  # Backward compat alias
 )
 # Phase 6: Risk Geometry
 from trade_analyzer.workflows.risk_geometry import (
@@ -189,10 +188,10 @@ from trade_analyzer.workflows.execution import (
     FridayCloseWorkflow,
     ExecutionDisplayWorkflow,
 )
-# Phase 9: Weekly Recommendations
+# Phase 8: Weekly Recommendations
 from trade_analyzer.workflows.weekly_recommendation import (
     WeeklyRecommendationWorkflow,
-    FullPipelineWorkflow as WeeklyFullPipelineWorkflow,
+    WeeklyFullPipelineWorkflow,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -240,7 +239,6 @@ async def run_universe_worker() -> None:
             UniverseRefreshWorkflow,
             UniverseSetupWorkflow,  # Now includes fundamental filter step
             FundamentalDataRefreshWorkflow,  # Monthly API refresh
-            FundamentalFilterWorkflow,  # Backward compat alias
             # Phase 2: Momentum Filter
             MomentumFilterWorkflow,
             UniverseAndMomentumWorkflow,
